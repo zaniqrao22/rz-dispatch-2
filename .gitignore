@@ -5,3 +5,15 @@ node_modules/
 .env
 .env.production
 .*.log
+# ---- junk / runtime artifacts / REAL data dumps - NEVER push ----
+*.zip
+*.pid
+*.sqlite-backup
+.backend.log
+watchdog.log
+watchdog.pid
+cmd
+backups/
+RZ-Dispatch.zip
+package.json.sqlite-backup
+server.js.sqlite-backup
