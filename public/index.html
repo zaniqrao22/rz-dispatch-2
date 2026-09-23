@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RZ Dispatch | Fleet Operations Dashboard</title>
+    <meta name="description" content="RZ Dispatch gives fleet teams a live view of jobs, drivers, vehicles, ETAs, and dispatch activity in one operations dashboard." />
+    <meta name="application-name" content="RZ Dispatch" />
+    <meta name="theme-color" content="#172326" />
+    <link rel="canonical" href="/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="RZ Dispatch" />
+    <meta property="og:title" content="RZ Dispatch | Fleet Operations Dashboard" />
+    <meta property="og:description" content="Monitor fleet activity, assign jobs, and keep dispatch operations moving from one live dashboard." />
+    <meta property="og:image" content="/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="RZ Dispatch | Fleet Operations Dashboard" />
+    <meta name="twitter:description" content="A live dispatch dashboard for jobs, drivers, vehicles, and fleet performance." />
+    <meta name="twitter:image" content="/og-image.png" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "RZ Dispatch",
+        "url": "https://rzdispatch.com",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Web",
+        "description": "Fleet operations dashboard for monitoring jobs, drivers, vehicles, ETAs, and dispatch activity.",
+        "offers": {
+          "@type": "Offer",
+          "price": "499.00",
+          "priceCurrency": "USD",
+          "priceValidUntil": "2027-12-31",
+          "availability": "https://schema.org/InStock"
+        },
+        "softwareVersion": "2.0.0",
+        "featureList": "Dispatch management, driver tracking, booking engine, customer CRM, route optimization, Stripe licensing"
+      }
+    </script>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23172326'/%3E%3Ctext x='16' y='23' font-family='Arial' font-size='20' font-weight='bold' fill='%23fff' text-anchor='middle'%3ER%3C/text%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">R</span><span>RZ DISPATCH</span><small>OPS / 04</small></div>
+        <div class="workspace-switcher"><span class="status-dot"></span><span>West Coast Fleet</span><span class="chevron">⌄</span></div>
+        <nav class="primary-nav" aria-label="Main navigation">
+          <a class="nav-item active" href="#dispatch"><span class="nav-icon">◫</span>Dispatch <b>12</b></a>
+          <a class="nav-item" href="#schedule"><span class="nav-icon">▦</span>Schedule</a>
+          <a class="nav-item" href="#fleet"><span class="nav-icon">◉</span>Fleet <b class="muted">28</b></a>
+          <a class="nav-item" href="#drivers"><span class="nav-icon">◎</span>Drivers</a>
+          <a class="nav-item" href="#bookings"><span class="nav-icon">✦</span>Bookings</a>
+          <a class="nav-item" href="#services"><span class="nav-icon">▣</span>Services</a>
+          <a class="nav-item" href="#coverage"><span class="nav-icon">◧</span>Coverage</a>
+          <a class="nav-item" href="#crm"><span class="nav-icon">◌</span>Customer CRM</a>
+          <a class="nav-item" href="#analytics"><span class="nav-icon">↗</span>Analytics</a>
+        </nav>
+        <div class="nav-label">WORKSPACE</div>
+        <nav class="secondary-nav" aria-label="Secondary navigation">
+          <a class="nav-item" href="#inbox"><span class="nav-icon">□</span>Inbox <b class="alert-count">4</b></a>
+          <a class="nav-item" href="#settings"><span class="nav-icon">⊙</span>Settings</a>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="help-card"><span class="help-icon">?</span><div><strong>Need a hand?</strong><small>Open support center</small></div><span>→</span></div>
+          <div class="user-row"><div class="avatar">--</div><div><strong>Dispatcher</strong><small>Operator</small></div><span class="more"></span></div>
+        </div>
+      </aside>
+      <main class="main-content" id="dispatch">
+        <header class="topbar"><div><p class="eyebrow" id="liveDateStamp"></p><h1 id="liveGreeting">Welcome <span></span></h1></div><div class="top-actions"><button class="icon-button" id="dashboardSearch" aria-label="Search">⌕</button><button class="icon-button" id="dashboardNotifications" aria-label="Notifications">♧<i></i><span class="notif-badge" id="notifBadge">0</span></button><button class="outline-button" id="optimizeRoute">Optimize route</button><button class="outline-button" id="newJob">+ New job</button><button class="outline-button" id="requestQuoteButton">Request quote</button></div></header>
+        <section class="metric-grid" aria-label="Fleet summary">
+          <article class="metric-card"><div class="metric-top"><span>ACTIVE JOBS</span><span class="metric-icon orange">↗</span></div><strong>24</strong><div class="metric-foot"><span class="up">↑ 8.2%</span> vs yesterday</div></article>
+          <article class="metric-card"><div class="metric-top"><span>ON THE ROAD</span><span class="metric-icon blue">◈</span></div><strong>18</strong><div class="metric-foot"><span class="up">↑ 12.5%</span> vs yesterday</div></article>
+          <article class="metric-card"><div class="metric-top"><span>AVAILABLE</span><span class="metric-icon green">✓</span></div><strong>06</strong><div class="metric-foot"><span class="neutral">→ 0.0%</span> vs yesterday</div></article>
+          <article class="metric-card"><div class="metric-top"><span>AVG. ETA</span><span class="metric-icon violet">◷</span></div><strong>18 <em>min</em></strong><div class="metric-foot"><span class="down">↓ 4.6%</span> vs yesterday</div></article>
+        </section>
+        <section class="dispatch-layout">
+          <div class="map-panel panel"><div class="panel-heading"><div><p class="eyebrow">LIVE OVERVIEW</p><h2>Fleet activity</h2></div><div class="map-tools"><span class="live-pill"><i></i> Live</span><button class="small-icon" aria-label="Recenter map">⌖</button><button class="small-icon" aria-label="Zoom in">＋</button><button class="small-icon" aria-label="Zoom out">－</button></div></div><div class="map-canvas" id="mapCanvas"></div><div class="map-legend-overlay"><span><i class="legend-dot orange-dot"></i>Pickup (high)</span><span><i class="legend-dot blue-dot"></i>Delivery</span><span><i class="legend-dot green-dot"></i>Standard</span></div></div>
+          <aside class="queue-panel panel"><div class="panel-heading queue-heading"><div><p class="eyebrow">NEEDS ATTENTION</p><h2>Dispatch queue <span class="queue-count">4</span></h2></div><button class="text-button">View all <span>→</span></button></div><div class="queue-list" id="queueList"><button class="queue-item selected" data-job="JO-8421"><span class="queue-status orange-status"></span><span class="queue-copy"><strong>JO-8421</strong><small>Pickup · 1280 Market St</small></span><span class="queue-time">Now</span></button><button class="queue-item" data-job="JO-8418"><span class="queue-status blue-status"></span><span class="queue-copy"><strong>JO-8418</strong><small>Delivery · 420 Hayes St</small></span><span class="queue-time">8 min</span></button><button class="queue-item" data-job="JO-8415"><span class="queue-status violet-status"></span><span class="queue-copy"><strong>JO-8415</strong><small>Pickup · 85 2nd St</small></span><span class="queue-time">14 min</span></button><button class="queue-item" data-job="JO-8409"><span class="queue-status green-status"></span><span class="queue-copy"><strong>JO-8409</strong><small>Delivery · 601 4th St</small></span><span class="queue-time">22 min</span></button></div><div class="selected-job" id="selectedJob"><div class="selected-job-top"><div><span class="job-tag">PICKUP</span><h3>JO-8421</h3></div><span class="priority">● High priority</span></div><div class="route"><div class="route-line"><span class="route-dot from"></span><span></span><span class="route-dot to"></span></div><div><p><small>FROM</small> 1280 Market Street</p><p><small>TO</small> 77 Geary Street</p></div></div><div class="job-detail"><span>Today, 10:40 AM</span><span>2.4 mi</span><span>$42.80</span></div><button class="dispatch-button" id="dispatchButton">Assign driver <span>→</span></button></div></aside>
+        </section>
+        <section class="bottom-grid"><div class="panel activity-panel"><div class="panel-heading"><div><p class="eyebrow">OPERATIONS LOG</p><h2>Recent activity</h2></div><button class="text-button">See full log <span>→</span></button></div><div class="activity-list"><div class="activity-row"><span class="activity-avatar orange-bg">ML</span><div><strong>Marco Lee <span>accepted job JO-8416</span></strong><small>Pickup at 2100 Franklin St</small></div><time>2 min ago</time></div><div class="activity-row"><span class="activity-avatar blue-bg">SK</span><div><strong>Sarah Kim <span>arrived at pickup</span></strong><small>Job JO-8414 · 900 Battery St</small></div><time>7 min ago</time></div><div class="activity-row"><span class="activity-avatar violet-bg">DR</span><div><strong>Daniel Ruiz <span>completed delivery</span></strong><small>Job JO-8408 · 1.2 mi trip</small></div><time>12 min ago</time></div></div></div><div class="panel performance-panel"><div class="panel-heading"><div><p class="eyebrow">TODAY</p><h2>Fleet performance</h2></div><button class="small-filter" id="performanceRefresh">Today</button></div><div class="chart"><div class="y-labels"><span>100%</span><span>75%</span><span>50%</span><span>25%</span><span>0%</span></div><div class="chart-area"><div class="gridline g1"></div><div class="gridline g2"></div><div class="gridline g3"></div><div class="gridline g4"></div><div class="gridline g5"></div><svg viewBox="0 0 420 145" preserveAspectRatio="none" aria-label="Performance chart"><path class="area-fill" d="M0,105 C35,100 48,78 78,85 S110,100 140,62 S178,72 205,55 S250,72 275,42 S315,58 340,31 S378,52 420,19 L420,145 L0,145 Z"/><path class="line" d="M0,105 C35,100 48,78 78,85 S110,100 140,62 S178,72 205,55 S250,72 275,42 S315,58 340,31 S378,52 420,19"/></svg><div class="x-labels"><span>6 AM</span><span>9 AM</span><span>12 PM</span><span>3 PM</span><span>6 PM</span></div></div></div><div class="chart-key"><span><i></i> On-time rate <strong>92%</strong></span><span><i></i> Completed <strong>36</strong></span></div></div></section>
+      </main>
+    </div>
+    <div class="modal-backdrop" id="jobModal" hidden>
+      <section class="job-modal" role="dialog" aria-modal="true" aria-labelledby="jobModalTitle">
+        <div class="modal-heading">
+          <div><p class="eyebrow">DISPATCH</p><h2 id="jobModalTitle">Create a new job</h2><p class="modal-subtitle">Add a route to the live dispatch queue.</p></div>
+          <button class="modal-close" id="closeJobModal" type="button" aria-label="Close dialog">&times;</button>
+        </div>
+        <form id="jobForm">
+          <label>Job type<select id="jobType" name="type"><option value="pickup">Pickup</option><option value="delivery">Delivery</option></select></label>
+          <label>Pickup address<input id="jobFrom" name="from" type="text" placeholder="100 Main Street" maxlength="500" required /></label>
+          <label>Delivery address<input id="jobTo" name="to" type="text" placeholder="200 Market Street" maxlength="500" required /></label>
+          <p class="form-error" id="jobFormError" role="alert"></p>
+          <div class="modal-actions"><button class="text-button" id="cancelJob" type="button">Cancel</button><button class="dispatch-button" type="submit">Create job <span>→</span></button></div>
+        </form>
+      </section>
+    </div>
+    <div class="modal-backdrop" id="vehicleModal" hidden>
+      <section class="job-modal" role="dialog" aria-modal="true" aria-labelledby="vehicleModalTitle">
+        <div class="modal-heading">
+          <div><p class="eyebrow">FLEET</p><h2 id="vehicleModalTitle">Add a vehicle</h2><p class="modal-subtitle">Register a vehicle in the West Coast fleet.</p></div>
+          <button class="modal-close" id="closeVehicleModal" type="button" aria-label="Close dialog">&times;</button>
+        </div>
+        <form id="vehicleForm">
+          <div class="quote-grid">
+            <label>Plate<input id="vehiclePlate" name="plate" type="text" placeholder="VAN-1200" maxlength="12" required /></label>
+            <label>Make<input id="vehicleMake" name="make" type="text" placeholder="Ford" maxlength="40" required /></label>
+            <label>Model<input id="vehicleModel" name="model" type="text" placeholder="Transit" maxlength="40" required /></label>
+            <label>Year<input id="vehicleYear" name="year" type="number" min="1980" max="2035" value="2025" required /></label>
+            <label>Vehicle type<select id="vehicleType" name="vehicleType"><option value="sedan">Sedan</option><option value="suv">SUV</option><option value="van">Van</option><option value="truck">Truck</option><option value="luxury">Luxury</option></select></label>
+            <label>Seating capacity<input id="vehicleCapacity" name="capacity" type="number" min="1" max="30" value="4" required /></label>
+            <label>Status<select id="vehicleStatus" name="status"><option value="available">Available</option><option value="on-route">On route</option><option value="off-duty">Off duty</option><option value="maintenance">Maintenance</option></select></label>
+            <label>Odometer (miles)<input id="vehicleMileage" name="mileage" type="number" min="0" value="0" required /></label>
+          </div>
+          <p class="form-error" id="vehicleFormError" role="alert"></p>
+          <div class="modal-actions"><button class="text-button" id="cancelVehicle" type="button">Cancel</button><button class="dispatch-button" type="submit">Save vehicle <span>→</span></button></div>
+        </form>
+      </section>
+    </div>
+    <div class="modal-backdrop" id="driverModal" hidden>
+      <section class="job-modal" role="dialog" aria-modal="true" aria-labelledby="driverModalTitle">
+        <div class="modal-heading">
+          <div><p class="eyebrow">DRIVERS</p><h2 id="driverModalTitle">Add a driver</h2><p class="modal-subtitle">Add a driver to the roster.</p></div>
+          <button class="modal-close" id="closeDriverModal" type="button" aria-label="Close dialog">&times;</button>
+        </div>
+        <form id="driverForm">
+          <div class="quote-grid">
+            <label>Full name<input id="driverName" name="name" type="text" placeholder="Jane Doe" maxlength="60" required /></label>
+            <label>Initials<input id="driverInitials" name="initials" type="text" placeholder="JD" maxlength="3" /></label>
+            <label>Phone<input id="driverPhone" name="phone" type="tel" placeholder="(415) 555-0100" maxlength="20" /></label>
+            <label>Email<input id="driverEmail" name="email" type="email" placeholder="jane@example.com" maxlength="80" /></label>
+            <label>Vehicle assigned<input id="driverVehicle" name="vehicle" type="text" placeholder="Van 12" maxlength="40" /></label>
+            <label>Rating (0–5)<input id="driverRating" name="rating" type="number" step="0.1" min="0" max="5" value="5" required /></label>
+            <label>Status<select id="driverStatus" name="status"><option value="Available">Available</option><option value="Offline">Offline</option></select></label>
+          </div>
+          <p class="form-error" id="driverFormError" role="alert"></p>
+          <div class="modal-actions"><button class="text-button" id="cancelDriver" type="button">Cancel</button><button class="dispatch-button" type="submit">Save driver <span>→</span></button></div>
+        </form>
+      </section>
+    </div>
+    <div class="toast" id="toast" role="status"></div>
+    <div class="modal-backdrop" id="licenseModal" hidden>
+      <section class="job-modal" role="dialog" aria-modal="true" aria-labelledby="licenseTitle">
+        <div class="modal-heading">
+          <div>
+            <p class="eyebrow">ACCESS</p>
+            <h2 id="licenseTitle">Activate RZ Dispatch</h2>
+            <p class="modal-subtitle">Enter your license key to unlock the dashboard.</p>
+          </div>
+          <button class="modal-close" id="closeLicenseModal" type="button" aria-label="Close dialog">&times;</button>
+        </div>
+        <form id="licenseForm">
+          <label>License key<input id="licenseKey" name="licenseKey" type="text" placeholder="RZ-XXXXXXXXXXXX" maxlength="50" /></label>
+          <label>Email (optional)<input id="licenseEmail" name="email" type="email" placeholder="owner@company.com" /></label>
+          <p class="form-error" id="licenseFormError" role="alert"></p>
+          <div class="modal-actions">
+            <button class="text-button" id="cancelLicense" type="button">Later</button>
+            <button class="dispatch-button" type="submit">Activate <span>→</span></button>
+          </div>
+        </form>
+        <div class="modal-divider" hidden id="purchaseDivider"><span>or</span></div>
+        <button class="outline-button modal-purchase" id="purchaseLicenseModal" type="button" hidden>Purchase lifetime license <span>→</span></button>
+      </section>
+    </div>
+    <div class="modal-backdrop" id="jobDetailModal" hidden>
+      <section class="job-modal job-detail-modal" role="dialog" aria-modal="true" aria-labelledby="jobDetailTitle">
+        <div class="modal-heading">
+          <div>
+            <p class="eyebrow">JOB DETAIL</p>
+            <h2 id="jobDetailTitle">Job information</h2>
+            <p class="modal-subtitle" id="jobDetailSubtitle">Live dispatch record</p>
+          </div>
+          <button class="modal-close" id="closeJobDetail" type="button" aria-label="Close job details">&times;</button>
+        </div>
+        <div id="jobDetailContent" class="job-detail-content"></div>
+      </section>
+    </div>
+    <div class="modal-backdrop" id="quoteModal" hidden>
+      <section class="job-modal quote-modal" role="dialog" aria-modal="true" aria-labelledby="quoteModalTitle">
+        <div class="modal-heading">
+          <div>
+            <p class="eyebrow">BOOKING</p>
+            <h2 id="quoteModalTitle">Request a quote</h2>
+            <p class="modal-subtitle">Get an instant estimate and book a driver.</p>
+          </div>
+          <button class="modal-close" id="closeQuoteModal" type="button" aria-label="Close dialog">&times;</button>
+        </div>
+        <form id="quoteForm">
+          <div class="quote-grid">
+            <label>Customer name<input name="customerName" type="text" placeholder="Maria Lopez" required /></label>
+            <label>Email<input name="email" type="email" placeholder="maria@company.com" required /></label>
+            <label>Phone<input name="phone" type="tel" placeholder="(415) 555-0191" required /></label>
+            <label>Service type<select name="serviceType"><option value="same-day">Same day</option><option value="airport-transfer">Airport transfer</option><option value="hourly">Hourly charter</option><option value="charter">Full charter</option></select></label>
+            <label>Vehicle type<select name="vehicleType"><option value="car">Car</option><option value="suv">SUV</option><option value="van">Van</option><option value="luxury">Luxury</option></select></label>
+            <label>Estimated miles<span class="miles-field"><input name="miles" type="number" min="1" step="1" value="18" required /><button class="outline-button miles-estimate" id="autoMilesButton" type="button">Auto</button></span></label>
+            <label>Passengers<input name="passengers" type="number" min="1" max="12" value="2" required /></label>
+            <label>Service date<input name="serviceDate" type="date" required /></label>
+            <label>Pickup address<input name="pickupAddress" type="text" placeholder="123 Mission Street" required /></label>
+            <label>Dropoff address<input name="dropoffAddress" type="text" placeholder="SFO Terminal 3" required /></label>
+            <label>Hours<input name="hours" type="number" min="1" step="1" value="3" /></label>
+          </div>
+          <label>Trip notes<textarea name="notes" rows="3" placeholder="Any timing, luggage, or special requests?"></textarea></label>
+          <div id="quoteEstimateSummary" class="quote-estimate" aria-live="polite"></div>
+          <p class="form-error" id="quoteFormError" role="alert"></p>
+          <div class="modal-actions">
+            <button class="text-button" id="estimateQuoteButton" type="button">Get estimate</button>
+            <button class="dispatch-button" type="submit">Book now <span>→</span></button>
+          </div>
+        </form>
+      </section>
+    </div>
+    <script src="realtime.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
