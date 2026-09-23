@@ -1,0 +1,47 @@
+{
+  "name": "rz-dispatch",
+  "version": "1.0.0",
+  "description": "Fleet operations SaaS dashboard — dispatch jobs, drivers, vehicles, bookings, CRM, and customer/operator portals with Stripe licensing.",
+  "main": "server.js",
+  "scripts": {
+    "test": "node --test",
+    "start": "node scripts/watchdog.js",
+    "stop": "node scripts/stop-app.js",
+    "start:direct": "node server.js",
+    "dev": "node scripts/dev.js",
+    "db:init": "node scripts/init-database.js",
+    "db:migrate": "node scripts/migrate.js",
+    "db:backup": "node scripts/backup.js",
+    "db:start": "node scripts/start-database.js",
+    "dev:db": "node scripts/start-database.js",
+    "start:prod": "node scripts/start-production.js"
+  },
+  "keywords": [
+    "fleet",
+    "dispatch",
+    "saas",
+    "dashboard",
+    "logistics",
+    "bookings",
+    "crm"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^10.0.10",
+    "pg": "^8.23.0",
+    "stripe": "^22.6.2",
+    "ws": "^8.18.1"
+  },
+  "devDependencies": {
+    "better-sqlite3": "^13.0.3",
+    "embedded-postgres": "^18.4.0-beta.17",
+    "puppeteer": "^25.11.0"
+  }
+}
