@@ -1598,7 +1598,9 @@ type TEXT NOT NULL,
     `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS currency TEXT`,
     `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS timezone TEXT`,
     `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS is_default INTEGER NOT NULL DEFAULT 0`,
-    `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS notify_inapp INTEGER NOT NULL DEFAULT 1`
+    `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS notify_inapp INTEGER NOT NULL DEFAULT 1`,
+    `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS vehicle_type TEXT`,
+    `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS passengers INTEGER NOT NULL DEFAULT 1`
   ];
 
   // Detect whether the admin-approval `status` column already exists BEFORE
