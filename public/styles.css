@@ -290,3 +290,44 @@
 .password-field-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .save-logout{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .customer-footer-actions{display:flex;gap:12px;justify-content:flex-end;flex-wrap:wrap;margin-top:28px;padding-top:18px;border-top:1px solid var(--line)}
+
+/* ============ MOBILE-HARDENING LAYER (phone-first additions, layered on existing breakpoints) ============ */
+@media (max-width: 720px) and (orientation: portrait) {
+  body { -webkit-text-size-adjust: 100%; }
+  .main-content { padding: 12px 10px 84px; }
+  .topbar { position: sticky; top: 0; z-index: 30; padding: 10px 12px; }
+  .topbar .top-actions { gap: 6px; }
+  .top-actions .icon-button { width: 38px; height: 38px; }
+  .dispatch-layout { grid-template-columns: 1fr; gap: 12px; }
+  .map-panel { order: -1; border-radius: 12px; }
+  .map-panel .map-canvas, #mapCanvas, .leaflet-container { height: 46vh !important; min-height: 300px; }
+  .map-panel .panel-heading { flex-wrap: wrap; }
+  .map-tools { gap: 5px; }
+  .map-tools .small-icon { width: 32px; height: 32px; }
+  .queue-panel { border-radius: 12px; }
+  .queue-list { max-height: none; }
+  .map-legend-overlay { flex-wrap: wrap; left: 10px; right: 10px; }
+  .map-legend-overlay span { font-size: 10px; }
+  .metric-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .sidebar { position: fixed; bottom: 0; left: 0; right: 0; top: auto; width: 100%; height: 64px; flex-direction: row; justify-content: space-around; padding: 0 4px; z-index: 40; border-top: 1px solid var(--line); }
+  .sidebar .brand, .sidebar .workspace-switcher, .sidebar .user-row, .sidebar .help-card, .sidebar .presence-strip, .sidebar .more { display: none !important; }
+  .sidebar .nav-item { padding: 0; }
+}
+/* landscape phones / short landscape: cap map height so panels remain reachable */
+@media (max-height: 560px) and (orientation: landscape) {
+  .map-panel .map-canvas, #mapCanvas, .leaflet-container { height: 38vh !important; min-height: 220px; }
+  .main-content { padding-bottom: 18px; }
+}
+/* ultra-narrow: single-column everything, table rows become cards */
+@media (max-width: 420px) {
+  .metric-card { padding: 10px; }
+  .metric-card > strong { font-size: 20px; }
+  .panel-heading h2 { font-size: 16px; }
+  .topbar .top-actions .icon-button span { display: none; }
+  .data-row { grid-template-columns: 1fr; gap: 6px; }
+  .dispatch-button, .outline-button, .text-button { width: 100%; text-align: center; }
+  .job-detail, .selected-job, .detail-facts { grid-template-columns: 1fr; }
+  .view-header { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .view-header .header-actions { width: 100%; }
+  .view-header .header-actions .button, .view-header .header-actions .outline-button { flex: 1; }
+}
