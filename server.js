@@ -123,7 +123,7 @@ app.use(helmet({
       styleSrc: ["'self'", 'https://fonts.googleapis.com', 'https://unpkg.com', 'https://*.unpkg.com', "'unsafe-inline'"],
       fontSrc: ["'self'", 'https://fonts.gstatic.com'],
       scriptSrc: ["'self'", 'https://unpkg.com', 'https://*.unpkg.com', "'unsafe-eval'"],
-      imgSrc: ["'self'", 'data:', 'https://*.tile.openstreetmap.org', 'https://tile.openstreetmap.org'],
+      imgSrc: ["'self'", 'data:', 'https://*.basemaps.cartocdn.com', 'https://basemaps.cartocdn.com', 'https://*.tile.openstreetmap.org', 'https://tile.openstreetmap.org'],
       connectSrc: ["'self'", 'https://unpkg.com', 'https://*.unpkg.com', ...allowedOrigins, ...allowedOrigins.map((o) => o.replace(/^http/, 'ws'))],
       workerSrc: ["'self'", 'blob:']
     }
