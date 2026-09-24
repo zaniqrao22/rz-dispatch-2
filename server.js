@@ -124,7 +124,7 @@ app.use(helmet({
       fontSrc: ["'self'", 'https://fonts.gstatic.com'],
       scriptSrc: ["'self'", 'https://unpkg.com', 'https://*.unpkg.com', "'unsafe-eval'"],
       imgSrc: ["'self'", 'data:', 'https://*.tile.openstreetmap.org', 'https://tile.openstreetmap.org'],
-      connectSrc: ["'self'", ...allowedOrigins, ...allowedOrigins.map((o) => o.replace(/^http/, 'ws'))],
+      connectSrc: ["'self'", 'https://unpkg.com', 'https://*.unpkg.com', ...allowedOrigins, ...allowedOrigins.map((o) => o.replace(/^http/, 'ws'))],
       workerSrc: ["'self'", 'blob:']
     }
   }
