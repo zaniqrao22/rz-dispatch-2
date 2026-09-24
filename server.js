@@ -44,7 +44,7 @@ const OPERATOR_EMAIL = (process.env.OPERATOR_EMAIL || 'operator@rzdispatch.local
 const OPERATOR_PASSWORD = process.env.OPERATOR_PASSWORD || 'Operator@12345';
 const OPERATOR_DRIVER_ID = process.env.OPERATOR_DRIVER_ID || 'DR-102';
 const APP_MODE = process.env.APP_MODE || 'saas';
-const REQUIRE_LICENSE = process.env.REQUIRE_LICENSE !== 'false';
+const REQUIRE_LICENSE = process.env.REQUIRE_LICENSE === 'true';  // default UNLOCKED; set REQUIRE_LICENSE=true to enforce license-gating
 const DEMO_LICENSE_KEY = (process.env.DEMO_LICENSE_KEY || process.env.RZ_LICENSE_KEY || '').trim();
 const LIFETIME_PRICE_CENTS = Number(process.env.LIFETIME_PRICE_CENTS) || 49900;
 const LIFETIME_CURRENCY = process.env.LIFETIME_CURRENCY || 'usd';
