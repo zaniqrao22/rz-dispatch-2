@@ -331,3 +331,41 @@
   .view-header .header-actions { width: 100%; }
   .view-header .header-actions .button, .view-header .header-actions .outline-button { flex: 1; }
 }
+
+/* ===== v2 MOBILE: inbox master->detail + dashboard options polish ===== */
+.message-back{display:none;align-items:center;gap:6px;margin-bottom:14px;padding:10px 14px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font-size:13px;font-weight:800;cursor:pointer;min-height:44px;align-self:flex-start}
+.message-back:active{background:var(--paper)}
+.message-row.is-active{background:#eef7f2;box-shadow:inset 3px 0 0 var(--green)}
+@media (max-width: 900px) {
+  .communication-layout { grid-template-columns: 1fr; min-height: 0; }
+  .message-reader { padding: 18px 15px; }
+  .message-reader-heading { flex-direction: row; align-items: flex-start; }
+  .message-reader-heading h2 { font-size: 19px; }
+  .message-body { font-size: 14px; line-height: 1.7; min-height: 0; padding: 18px 0; white-space: pre-wrap; word-break: break-word; }
+  .message-reader-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+  .message-reader-actions .dispatch-button { grid-column: 1 / -1; width: 100%; }
+  .message-reader-actions .danger-button, .message-reader-actions .outline-button { width: 100%; }
+  .message-list-panel { max-height: 60vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .message-row { padding: 15px 14px; min-height: 66px; }
+  .message-row-copy strong { font-size: 13px; }
+  .message-row-copy small { font-size: 11px; white-space: normal; }
+  .message-back { display: inline-flex; }
+  .communication-layout.is-reading .message-list-panel { display: none; }
+  .customer-context-strip { flex-direction: column; align-items: stretch; gap: 10px; }
+  .customer-context-strip .outline-button { width: 100%; }
+}
+@media (max-width: 720px) {
+  .view-header .view-actions, .view-header .header-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; width: 100%; }
+  .view-header .view-actions button, .view-header .header-actions button { width: 100%; min-height: 46px; justify-content: center; }
+  .view-header > .dispatch-button { width: 100%; min-height: 46px; }
+  .view-actions:has(> :only-child) { grid-template-columns: 1fr; }
+  .inbox-toolbar { padding: 12px 14px; gap: 10px; }
+  .inbox-tabs { width: 100%; }
+  .inbox-tab { flex: 1; min-height: 40px; }
+  .inbox-search input { font-size: 16px; }
+  .compose-message, #composeMessage { width: 100%; }
+}
+@media (max-width: 420px) {
+  .message-reader-actions { grid-template-columns: 1fr; }
+  .view-header .view-actions, .view-header .header-actions { grid-template-columns: 1fr; }
+}

@@ -1423,7 +1423,7 @@ function formatMessageTime(value) {
 
 function renderMessageReader(message) {
   const isCustomerThread = Boolean(message.customerEmail);
-  return `<div class="message-reader-heading"><div><span class="eyebrow">${escapeHTML(message.type)}</span><h2>${escapeHTML(message.subject)}</h2><p>From ${escapeHTML(message.sender)} · ${formatFullMessageTime(message.createdAt)}</p></div><span class="activity-avatar orange-bg">${escapeHTML(message.initials)}</span></div>${isCustomerThread ? `<div class="customer-context-strip"><div><strong>Customer</strong>${message.customerName ? `<span>${escapeHTML(message.customerName)}</span>` : ''}<em>${escapeHTML(message.customerEmail)}</em></div><button class="outline-button" id="customerThreadView" type="button">View thread</button></div>` : ''}<div class="message-body">${escapeHTML(message.body)}</div><div class="message-reader-actions"><button class="dispatch-button" id="replyMessage" type="button">${isCustomerThread ? 'Reply to customer' : 'Reply'}</button><button class="outline-button" id="markUnreadMessage" type="button">Mark unread</button><button class="danger-button" id="deleteMessage" type="button">Delete</button></div>`;
+  return `<button class="message-back" id="messageBack" type="button" aria-label="Back to inbox">&#8249; Back to inbox</button><div class="message-reader-heading"><div><span class="eyebrow">${escapeHTML(message.type)}</span><h2>${escapeHTML(message.subject)}</h2><p>From ${escapeHTML(message.sender)} · ${formatFullMessageTime(message.createdAt)}</p></div><span class="activity-avatar orange-bg">${escapeHTML(message.initials)}</span></div>${isCustomerThread ? `<div class="customer-context-strip"><div><strong>Customer</strong>${message.customerName ? `<span>${escapeHTML(message.customerName)}</span>` : ''}<em>${escapeHTML(message.customerEmail)}</em></div><button class="outline-button" id="customerThreadView" type="button">View thread</button></div>` : ''}<div class="message-body">${escapeHTML(message.body)}</div><div class="message-reader-actions"><button class="dispatch-button" id="replyMessage" type="button">${isCustomerThread ? 'Reply to customer' : 'Reply'}</button><button class="outline-button" id="markUnreadMessage" type="button">Mark unread</button><button class="danger-button" id="deleteMessage" type="button">Delete</button></div>`;
 }
 
 async function openInboxMessage(message, messages) {
@@ -1431,6 +1431,11 @@ async function openInboxMessage(message, messages) {
   inboxState.selected = message.id;
   const reader = document.getElementById('messageReader');
   if (reader) reader.innerHTML = renderMessageReader(message);
+  document.querySelector('.communication-layout')?.classList.add('is-reading');
+  document.querySelectorAll('.message-row').forEach((row) => row.classList.toggle('is-active', row.dataset.message === message.id));
+  document.getElementById('messageBack')?.addEventListener('click', () => {
+    document.querySelector('.communication-layout')?.classList.remove('is-reading');
+  });
   if (!message.isRead) {
     try {
       await fetchJson(`/api/messages/${encodeURIComponent(message.id)}/read`, { method: 'PATCH', body: '{}' });
