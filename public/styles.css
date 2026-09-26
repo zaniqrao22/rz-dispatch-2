@@ -369,3 +369,30 @@
   .message-reader-actions { grid-template-columns: 1fr; }
   .view-header .view-actions, .view-header .header-actions { grid-template-columns: 1fr; }
 }
+
+/* ===== TOPBAR FIX: no more overlap; keep ALL actions on mobile ===== */
+.topbar > div:first-child { min-width: 0; }
+#liveGreeting { overflow-wrap: anywhere; word-break: break-word; }
+@media (max-width: 900px) {
+  .topbar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .topbar > div:first-child { width: 100%; }
+  .topbar .eyebrow#liveDateStamp { font-size: 10px; }
+  .topbar h1#liveGreeting { font-size: 20px; line-height: 1.25; margin: 2px 0 0; }
+  .top-actions {
+    display: flex; flex-wrap: wrap; gap: 8px; width: 100%;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  .top-actions .icon-button { display: grid !important; }
+  .top-actions .outline-button { flex: 1 1 auto; min-height: 44px; padding: 10px 14px; font-size: 12px; white-space: nowrap; }
+}
+@media (max-width: 720px) {
+  .top-actions { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+  .top-actions::-webkit-scrollbar { display: none; }
+  .top-actions > * { flex: 0 0 auto; }
+  .top-actions .icon-button { width: 44px; height: 44px; }
+}
+@media (max-width: 480px) {
+  .topbar { padding: 12px 12px 10px; }
+  .topbar h1#liveGreeting { font-size: 18px; }
+  .top-actions .outline-button { font-size: 11px; padding: 9px 12px; }
+}
