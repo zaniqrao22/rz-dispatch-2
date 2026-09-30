@@ -7,6 +7,8 @@
     <meta name="description" content="RZ Dispatch gives fleet teams a live view of jobs, drivers, vehicles, ETAs, and dispatch activity in one operations dashboard." />
     <meta name="application-name" content="RZ Dispatch" />
     <meta name="theme-color" content="#172326" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="manifest" href="/manifest.json" />
     <link rel="canonical" href="/" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="RZ Dispatch" />
@@ -37,13 +39,14 @@
         "featureList": "Dispatch management, driver tracking, booking engine, customer CRM, route optimization, Stripe licensing"
       }
     </script>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23172326'/%3E%3Ctext x='16' y='23' font-family='Arial' font-size='20' font-weight='bold' fill='%23fff' text-anchor='middle'%3ER%3C/text%3E%3C/svg%3E" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-    <link rel="stylesheet" href="styles.css?v=20260930-m4" />
+    <link rel="stylesheet" href="styles.css?v=20260930-m5" />
   </head>
   <body>
     <div class="app-shell">
@@ -215,7 +218,7 @@
         </form>
       </section>
     </div>
-    <script src="realtime.js?v=20260930-m4"></script>
-    <script src="app.js?v=20260930-m4"></script>
+    <script src="realtime.js?v=20260930-m5"></script>
+    <script src="app.js?v=20260930-m5"></script>
   </body>
 </html>

@@ -1,0 +1,12 @@
+﻿{
+  "name": "RZ Dispatch",
+  "short_name": "RZ Dispatch",
+  "description": "Fleet operations dashboard for monitoring jobs, drivers, vehicles, and ETAs.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f8f6",
+  "theme_color": "#172326",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
