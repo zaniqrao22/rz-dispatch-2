@@ -8,7 +8,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('./db');
 const Stripe = require('stripe');
-const { sendMail } = require('./mailer');
+const { sendMail, enabled: mailerEnabled } = require('./mailer');
 const { welcomeEmail, verifyEmailEmail, passwordResetEmail } = require('./mailer_templates');
 const realtime = require('./realtime-hub');
 
@@ -288,20 +288,25 @@ app.post('/api/admin/customers/access-link', requireAuth, isAdmin, async (req, r
   }
   const accessToken = createCustomerAccessToken({ id: user.id, email: user.email });
   const link = customerAccessLink(accessToken);
-  let emailed = false;
   if (req.body?.sendEmail) {
+    if (!mailerEnabled) {
+      return res.status(503).json({
+        error: 'Email is not set up on this server yet, so the link could not be sent. Copy the link below and send it to the customer yourself.',
+        link,
+        emailConfigured: false
+      });
+    }
     try {
       await sendMail(
         user.email,
         'Your RZ Dispatch access link',
         `<p>Hi ${emailName(user.email)},</p><p>Use the link below to open your RZ Dispatch page. It signs you in without a password and expires in 7 days.</p><p><a href="${link}">Open my page</a></p>`
       );
-      emailed = true;
     } catch (mailError) {
       return res.status(500).json({ error: 'Could not send the email. Copy the link instead.', link });
     }
   }
-  res.json({ success: true, link, emailed, email: user.email, expiresInDays: 7 });
+  res.json({ success: true, link, emailed: Boolean(req.body?.sendEmail), email: user.email, expiresInDays: 7, emailConfigured: mailerEnabled });
 });
 
 app.post('/api/auth/login', async (req, res) => {

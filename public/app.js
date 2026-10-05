@@ -3053,16 +3053,12 @@ async function renderSettings() {
         body: JSON.stringify({ email, sendEmail: Boolean(sendEmail) })
       });
       const payload = await response.json();
+      if (payload.link) { value.value = payload.link; result.style.display = 'block'; }
       if (!response.ok) throw new Error(payload.error || 'Could not create the access link.');
-      value.value = payload.link;
-      result.style.display = 'block';
-      showToast(payload.emailed ? 'Access link emailed to the customer' : 'Access link created');
+      showToast(payload.emailed ? 'Access link emailed to the customer' : 'Access link created — copy it and send it to the customer');
     } catch (linkError) {
       error.textContent = linkError.message;
-      if (linkError.link) {
-        value.value = linkError.link;
-        result.style.display = 'block';
-      }
+      if (linkError.link && !value.value) { value.value = linkError.link; result.style.display = 'block'; }
     }
   });
 
@@ -3551,7 +3547,6 @@ async function consumeCustomerAccessLink() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || 'This access link is not valid.');
     setAuthToken(payload.token, true);
-    localStorage.setItem(MODE_KEY, 'customer');
     const clean = window.location.pathname + window.location.hash;
     window.history.replaceState({}, '', clean);
     showToast('Signed in from your access link');
