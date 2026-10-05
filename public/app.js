@@ -115,10 +115,22 @@ function initLeafletMap() {
   });
   L.control.zoom({ position: 'bottomright' }).addTo(leafletMap);
   L.control.attribution({ prefix: '' }).addTo(leafletMap);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  const tileLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+    attribution: '&copy; Esri &mdash; Source: Esri, HERE, Garmin, &copy; OpenStreetMap contributors',
     maxZoom: 19
-    }).addTo(leafletMap);
+  });
+  let tileErrorCount = 0;
+  tileLayer.on('tileerror', () => {
+    tileErrorCount += 1;
+    if (tileErrorCount === 8) {
+      const note = document.createElement('div');
+      note.className = 'map-tile-note';
+      note.textContent = 'Map tiles are blocked on this network. Live vehicle positions are still updating below.';
+      leafletMap?.getContainer()?.appendChild(note);
+      window.setTimeout(() => note.remove(), 12000);
+    }
+  });
+  tileLayer.addTo(leafletMap);
   mapMarkers = L.layerGroup().addTo(leafletMap);
   mapRouteLines = L.layerGroup().addTo(leafletMap);
   setTimeout(() => { leafletMap.invalidateSize(); }, 120);

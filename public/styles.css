@@ -396,3 +396,5 @@
   .topbar h1#liveGreeting { font-size: 18px; }
   .top-actions .outline-button { font-size: 11px; padding: 9px 12px; }
 }
+
+.map-tile-note{position:absolute;left:50%;transform:translateX(-50%);bottom:14px;z-index:500;max-width:88%;padding:9px 14px;border-radius:8px;background:rgba(15,23,42,.88);color:#fff;font-size:12px;line-height:1.45;text-align:center;pointer-events:none}
