@@ -29,7 +29,7 @@ process.on('unhandledRejection', (reason) => {
   console.error('[backend] Unhandled rejection (server keeps running):', reason instanceof Error ? reason.message : reason);
 });
 const DATA_DIR = path.join(__dirname, '.data');
-const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+const PUBLIC_URL = process.env.PUBLIC_URL || `https://rz-dispatch-2.onrender.com`;
 const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? null : 'dev-only-insecure-secret-change-me');
 if (!JWT_SECRET) {
   console.error('FATAL: JWT_SECRET environment variable is required in production. Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
@@ -246,6 +246,62 @@ app.post('/api/auth/reset-password', async (req, res) => {
   }
   await db.run('UPDATE users SET password_hash = ? WHERE id = ?', bcrypt.hashSync(password, 12), payload.userId);
   res.json({ success: true, message: 'Password updated. You can now sign in.' });
+});
+
+app.get('/api/customer/access', async (req, res) => {
+  const raw = String(req.query.token || '').trim();
+  if (!raw) return res.status(400).json({ error: 'Missing access token.' });
+  let claims;
+  try {
+    claims = verifyCustomerAccessToken(raw);
+  } catch (error) {
+    const expired = error && error.name === 'TokenExpiredError';
+    return res.status(401).json({
+      error: expired
+        ? 'This access link has expired. Ask your dispatcher for a new one.'
+        : 'This access link is not valid.'
+    });
+  }
+  const user = await db.get('SELECT * FROM users WHERE id = ?', claims.userId);
+  if (!user) return res.status(404).json({ error: 'Account not found.' });
+  if (user.status === 'pending') {
+    return res.status(403).json({ error: 'Your account is still awaiting approval.' });
+  }
+  if (user.status === 'rejected') {
+    return res.status(403).json({ error: 'Your registration request was declined.' });
+  }
+  const token = signToken({ id: user.id, email: user.email, role: user.role, driverId: user.driver_id });
+  const settings = await getUserSettings(user);
+  res.json({
+    token,
+    user: { id: user.id, email: user.email, role: user.role, driverId: user.driver_id, name: settings.name }
+  });
+});
+
+app.post('/api/admin/customers/access-link', requireAuth, isAdmin, async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!email) return res.status(400).json({ error: 'Enter the customer email address.' });
+  const user = await db.get('SELECT * FROM users WHERE email = ?', email);
+  if (!user) return res.status(404).json({ error: 'No account found for that email.' });
+  if (user.status === 'pending') {
+    return res.status(400).json({ error: 'Approve this account before sending an access link.' });
+  }
+  const accessToken = createCustomerAccessToken({ id: user.id, email: user.email });
+  const link = customerAccessLink(accessToken);
+  let emailed = false;
+  if (req.body?.sendEmail) {
+    try {
+      await sendMail(
+        user.email,
+        'Your RZ Dispatch access link',
+        `<p>Hi ${emailName(user.email)},</p><p>Use the link below to open your RZ Dispatch page. It signs you in without a password and expires in 7 days.</p><p><a href="${link}">Open my page</a></p>`
+      );
+      emailed = true;
+    } catch (mailError) {
+      return res.status(500).json({ error: 'Could not send the email. Copy the link instead.', link });
+    }
+  }
+  res.json({ success: true, link, emailed, email: user.email, expiresInDays: 7 });
 });
 
 app.post('/api/auth/login', async (req, res) => {
@@ -2412,6 +2468,26 @@ function createEmailVerificationToken(payload) {
 
 function verificationLink(token) {
   return `${PUBLIC_URL}/api/auth/verify-email/${encodeURIComponent(token)}`;
+}
+
+function createCustomerAccessToken(payload) {
+  return jwt.sign(
+    { userId: payload.id, email: payload.email, purpose: 'customer_access' },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+}
+
+function customerAccessLink(token) {
+  return `${PUBLIC_URL}/?access=${encodeURIComponent(token)}`;
+}
+
+function verifyCustomerAccessToken(token) {
+  const decoded = jwt.verify(token, JWT_SECRET);
+  if (decoded.purpose !== 'customer_access') {
+    throw new Error('Invalid purpose');
+  }
+  return { userId: decoded.userId, email: decoded.email };
 }
 
 function createPasswordResetToken(payload) {

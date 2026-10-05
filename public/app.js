@@ -2828,6 +2828,24 @@ async function renderSettings() {
           <p class="view-subtitle">New registrations cannot sign in until you approve them.</p>
         </div>
       </div>
+      <section class="panel data-panel" style="margin-top:18px;">
+        <div class="panel-heading">
+          <div><p class="eyebrow">CUSTOMER ACCESS</p><h2>Send a customer their page</h2></div>
+        </div>
+        <div style="padding:16px 18px;">
+          <p class="view-subtitle" style="margin-bottom:12px;">Create a link a customer can open to land straight on their page &mdash; no password. Expires in 7 days.</p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <input id="accessLinkEmail" type="email" placeholder="customer@company.com" style="flex:1 1 220px;padding:11px 12px;border:1px solid #dce5e1;border-radius:7px;font:inherit;min-height:44px;" />
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--muted);"><input id="accessLinkSend" type="checkbox" /> Email it</label>
+            <button type="button" class="dispatch-button" id="accessLinkCreate" style="min-height:44px;">Create link</button>
+          </div>
+          <div id="accessLinkResult" style="margin-top:12px;display:none;">
+            <input id="accessLinkValue" readonly style="width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:7px;font-family:'DM Mono',monospace;font-size:12px;min-height:44px;" />
+            <div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="outline-button" id="accessLinkCopy" style="min-height:44px;">Copy link</button></div>
+          </div>
+          <p class="form-error" id="accessLinkError" style="margin-top:10px;"></p>
+        </div>
+      </section>
       ${pendingUsers.length ? `
         <div class="data-table approvals-table">
           ${pendingUsers.map((u) => `
@@ -3017,6 +3035,47 @@ async function renderSettings() {
   });
   document.querySelectorAll('.approvals-reject').forEach((button) => {
     button.addEventListener('click', () => setApproval(button.closest('.approvals-row')?.dataset?.id || '', 'reject'));
+  });
+
+  document.getElementById('accessLinkCreate')?.addEventListener('click', async () => {
+    const input = document.getElementById('accessLinkEmail');
+    const error = document.getElementById('accessLinkError');
+    const result = document.getElementById('accessLinkResult');
+    const value = document.getElementById('accessLinkValue');
+    const sendEmail = document.getElementById('accessLinkSend')?.checked;
+    error.textContent = '';
+    result.style.display = 'none';
+    const email = String(input?.value || '').trim();
+    if (!email) { error.textContent = 'Enter the customer email address.'; return; }
+    try {
+      const response = await fetchJson('/api/admin/customers/access-link', {
+        method: 'POST',
+        body: JSON.stringify({ email, sendEmail: Boolean(sendEmail) })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Could not create the access link.');
+      value.value = payload.link;
+      result.style.display = 'block';
+      showToast(payload.emailed ? 'Access link emailed to the customer' : 'Access link created');
+    } catch (linkError) {
+      error.textContent = linkError.message;
+      if (linkError.link) {
+        value.value = linkError.link;
+        result.style.display = 'block';
+      }
+    }
+  });
+
+  document.getElementById('accessLinkCopy')?.addEventListener('click', async () => {
+    const value = document.getElementById('accessLinkValue');
+    if (!value?.value) return;
+    try {
+      await navigator.clipboard.writeText(value.value);
+      showToast('Access link copied');
+    } catch (copyError) {
+      value.select();
+      showToast('Press and hold to copy the link');
+    }
   });
 
   document.getElementById('profileForm')?.addEventListener('submit', async (event) => {
@@ -3483,7 +3542,31 @@ async function sendOperatorMessage(event) {
   }
 }
 
+async function consumeCustomerAccessLink() {
+  const params = new URLSearchParams(window.location.search);
+  const accessToken = params.get('access');
+  if (!accessToken) return false;
+  try {
+    const response = await fetchJson('/api/customer/access?token=' + encodeURIComponent(accessToken));
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'This access link is not valid.');
+    setAuthToken(payload.token, true);
+    localStorage.setItem(MODE_KEY, 'customer');
+    const clean = window.location.pathname + window.location.hash;
+    window.history.replaceState({}, '', clean);
+    showToast('Signed in from your access link');
+  } catch (error) {
+    showToast(error.message || 'This access link is not valid.');
+    window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+    return false;
+  }
+  window.location.reload();
+  return true;
+}
+
 async function initializeApp() {
+  const accessGranted = await consumeCustomerAccessLink();
+  if (accessGranted) return;
   await detectApiBase();
   rtConfigure();
   rtRegisterHandlers();
