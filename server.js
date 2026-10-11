@@ -31,7 +31,10 @@ process.on('unhandledRejection', (reason) => {
   console.error('[backend] Unhandled rejection (server keeps running):', reason instanceof Error ? reason.message : reason);
 });
 const DATA_DIR = path.join(__dirname, '.data');
-const PUBLIC_URL = process.env.PUBLIC_URL || `https://rz-dispatch-2.onrender.com`;
+// Public base URL used for email links, Stripe redirects and CORS. Defaults
+// to the local server so the app works out of the box on localhost; set
+// PUBLIC_URL to the deployed origin when hosting remotely (e.g. Render).
+const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
 const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? null : 'dev-only-insecure-secret-change-me');
 if (!JWT_SECRET) {
   console.error('FATAL: JWT_SECRET environment variable is required in production. Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
