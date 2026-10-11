@@ -20,3 +20,6 @@ backups/
 RZ-Dispatch.zip
 package.json.sqlite-backup
 server.js.sqlite-backup
+
+# ---- magic-link testing artifacts (feature removed) ----
+.magictest.*
