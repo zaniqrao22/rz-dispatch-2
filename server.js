@@ -266,73 +266,6 @@ app.post('/api/auth/reset-password', async (req, res) => {
   res.json({ success: true, message: 'Password updated. You can now sign in.' });
 });
 
-app.get('/api/customer/access', async (req, res) => {
-  const raw = String(req.query.token || '').trim();
-  if (!raw) return res.status(400).json({ error: 'Missing access token.' });
-  let claims;
-  try {
-    claims = verifyCustomerAccessToken(raw);
-  } catch (error) {
-    const expired = error && error.name === 'TokenExpiredError';
-    return res.status(401).json({
-      error: expired
-        ? 'This access link has expired. Ask your dispatcher for a new one.'
-        : 'This access link is not valid.'
-    });
-  }
-  const user = await db.get('SELECT * FROM users WHERE id = ?', claims.userId);
-  if (!user) return res.status(404).json({ error: 'Account not found.' });
-  if (user.status === 'pending') {
-    return res.status(403).json({ error: 'Your account is still awaiting approval.' });
-  }
-  if (user.status === 'rejected') {
-    return res.status(403).json({ error: 'Your registration request was declined.' });
-  }
-  const session = portalAuth ? await portalAuth.createSession(user, req) : null;
-  if (portalAuth && session) portalAuth.setSessionCookie(res, session.id);
-  const account = portalAuth ? await portalAuth.ensureCompanyAccount(user) : null;
-  const token = signToken({ id: user.id, email: user.email, role: user.role, driverId: user.driver_id, sid: session?.id, companyAccountId: account?.id || user.company_account_id });
-  const settings = await getUserSettings(user);
-  res.json({
-    token,
-    sessionId: session?.id || null,
-    refreshToken: session?.refreshToken || null,
-    expiresIn: '7d',
-    user: { id: user.id, email: user.email, role: user.role, driverId: user.driver_id, name: settings.name, companyAccountId: account?.id || user.company_account_id || null }
-  });
-});
-
-app.post('/api/admin/customers/access-link', requireAuth, isAdmin, async (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  if (!email) return res.status(400).json({ error: 'Enter the customer email address.' });
-  const user = await db.get('SELECT * FROM users WHERE email = ?', email);
-  if (!user) return res.status(404).json({ error: 'No account found for that email.' });
-  if (user.status === 'pending') {
-    return res.status(400).json({ error: 'Approve this account before sending an access link.' });
-  }
-  const accessToken = createCustomerAccessToken({ id: user.id, email: user.email });
-  const link = customerAccessLink(accessToken);
-  if (req.body?.sendEmail) {
-    if (!mailerEnabled) {
-      return res.status(503).json({
-        error: 'Email is not set up on this server yet, so the link could not be sent. Copy the link below and send it to the customer yourself.',
-        link,
-        emailConfigured: false
-      });
-    }
-    try {
-      await sendMail(
-        user.email,
-        'Your RZ Dispatch access link',
-        `<p>Hi ${emailName(user.email)},</p><p>Use the link below to open your RZ Dispatch page. It signs you in without a password and expires in 7 days.</p><p><a href="${link}">Open my page</a></p>`
-      );
-    } catch (mailError) {
-      return res.status(500).json({ error: 'Could not send the email. Copy the link instead.', link });
-    }
-  }
-  res.json({ success: true, link, emailed: Boolean(req.body?.sendEmail), email: user.email, expiresInDays: 7, emailConfigured: mailerEnabled });
-});
-
 app.post('/api/auth/login', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
@@ -2578,26 +2511,6 @@ function createEmailVerificationToken(payload) {
 
 function verificationLink(token) {
   return `${PUBLIC_URL}/api/auth/verify-email/${encodeURIComponent(token)}`;
-}
-
-function createCustomerAccessToken(payload) {
-  return jwt.sign(
-    { userId: payload.id, email: payload.email, purpose: 'customer_access' },
-    JWT_SECRET,
-    { expiresIn: '7d' }
-  );
-}
-
-function customerAccessLink(token) {
-  return `${PUBLIC_URL}/?access=${encodeURIComponent(token)}`;
-}
-
-function verifyCustomerAccessToken(token) {
-  const decoded = jwt.verify(token, JWT_SECRET);
-  if (decoded.purpose !== 'customer_access') {
-    throw new Error('Invalid purpose');
-  }
-  return { userId: decoded.userId, email: decoded.email };
 }
 
 function createPasswordResetToken(payload) {
