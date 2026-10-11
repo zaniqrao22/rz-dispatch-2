@@ -10,7 +10,7 @@
  *   npm run db:init
  */
 
-const { initializeDatabase } = require('../server');
+const { initializeDatabase } = require('../backend/server');
 
 (async () => {
   await initializeDatabase();

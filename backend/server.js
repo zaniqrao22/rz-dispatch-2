@@ -30,7 +30,7 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason) => {
   console.error('[backend] Unhandled rejection (server keeps running):', reason instanceof Error ? reason.message : reason);
 });
-const DATA_DIR = path.join(__dirname, '.data');
+const DATA_DIR = path.join(__dirname, '..', 'database', 'sqlite');
 // Public base URL used for email links, Stripe redirects and CORS. Defaults
 // to the local server so the app works out of the box on localhost; set
 // PUBLIC_URL to the deployed origin when hosting remotely (e.g. Render).
@@ -1383,7 +1383,7 @@ app.post('/api/optimization/apply', requireStaff, async (req, res) => {
   res.json({ success: true, jobs: optimized, count: optimized.length, message: optimized.length ? `Route optimized for ${optimized.length} active loads` : 'No active loads to optimize' });
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, '..', 'frontend')));
 app.use('/api', (req, res) => res.status(404).json({ error: 'API route not found' }));
 // Express error middleware: always answer the front end with JSON, never an
 // HTML error page (which the browser would fail to parse as JSON).
@@ -1395,7 +1395,7 @@ app.use((err, req, res, next) => {
 });
 
 if (require.main === module) {
-  const { ensureDatabase } = require('./scripts/ensure-database');
+  const { ensureDatabase } = require('../scripts/ensure-database');
   (async () => {
     await ensureDatabase();
     await initializeDatabase();
@@ -1768,7 +1768,7 @@ const vehicleCount = Number((await db.get('SELECT COUNT(*) as count FROM vehicle
 
   if (require.main === module) {
     try {
-      const { runMigrations } = require('./scripts/migrate');
+      const { runMigrations } = require('../scripts/migrate');
       await runMigrations();
     } catch (migrationError) {
       console.error('[migrate] migration runner failed during initialize:', migrationError?.message || migrationError);

@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
-const db = require('../db');
+const db = require('../backend/db');
 
-const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations');
+const MIGRATIONS_DIR = path.join(__dirname, '..', 'database', 'migrations');
 
 async function runMigrations() {
   await db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -50,11 +50,11 @@ module.exports = { runMigrations };
 if (require.main === module) {
   (async () => {
     const { ensureDatabase } = require('./ensure-database');
-    const { initializeDatabase } = require('../server');
+    const { initializeDatabase } = require('../backend/server');
     await ensureDatabase();
     await initializeDatabase();
     await runMigrations();
-    const db = require('../db');
+    const db = require('../backend/db');
     await db.close();
     process.exit(0);
   })().catch((error) => { console.error('[migrate] failed:', error); process.exit(1); });

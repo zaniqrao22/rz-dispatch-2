@@ -14,7 +14,7 @@ const path = require('path');
 const fs = require('fs');
 const EmbeddedPostgres = require('embedded-postgres').default;
 
-const PGDATA = path.join(__dirname, '..', '.pgdata');
+const PGDATA = path.join(__dirname, '..', 'database', 'pgdata');
 const PORT = Number(process.env.PGPORT) || 55458;
 const USER = process.env.PGUSER || 'postgres';
 const PASSWORD = process.env.PGPASSWORD || 'postgres';

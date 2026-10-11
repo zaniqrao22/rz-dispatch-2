@@ -13,7 +13,7 @@
 
 require('dotenv').config();
 const { ensureDatabase } = require('./ensure-database');
-const { initializeDatabase, app, realtime } = require('../server');
+const { initializeDatabase, app, realtime } = require('../backend/server');
 
 async function main() {
   await ensureDatabase();

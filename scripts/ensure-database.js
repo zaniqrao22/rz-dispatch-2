@@ -20,7 +20,7 @@ const path = require('path');
 const net = require('net');
 const { spawnSync } = require('child_process');
 
-const PGDATA = path.join(__dirname, '..', '.pgdata');
+const PGDATA = path.join(__dirname, '..', 'database', 'pgdata');
 const PGPORT_FILE = path.join(__dirname, '..', '.pgport');
 
 /**
@@ -64,7 +64,7 @@ function isPortOpen(port, host) {
 
 async function isDatabaseResponsive() {
   try {
-    const db = require('../db');
+    const db = require('../backend/db');
     await db.all('SELECT 1 AS ok');
     return true;
   } catch (error) {

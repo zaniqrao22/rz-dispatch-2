@@ -9,7 +9,7 @@ const { spawn } = require('node:child_process');
 delete process.env.STRIPE_SECRET_KEY;
 delete process.env.STRIPE_WEBHOOK_SECRET;
 
-const { app, stripe } = require('../server');
+const { app, stripe } = require('../backend/server');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 

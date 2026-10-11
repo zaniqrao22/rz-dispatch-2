@@ -23,7 +23,7 @@ if (!process.env.NODE_ENV) process.env.NODE_ENV = 'production';
 if (!process.env.HOST) process.env.HOST = '0.0.0.0';
 if (!process.env.PORT) process.env.PORT = '8000';
 
-const { initializeDatabase, app, realtime } = require('../server');
+const { initializeDatabase, app, realtime } = require('../backend/server');
 
 async function main() {
   await initializeDatabase();

@@ -35,7 +35,7 @@ const { Pool } = require('pg');
  */
 function readPgPortFile() {
   try {
-    const value = Number(fs.readFileSync(path.join(__dirname, '.pgport'), 'utf8').trim());
+    const value = Number(fs.readFileSync(path.join(__dirname, '..', '.pgport'), 'utf8').trim());
     if (Number.isInteger(value) && value > 0 && value < 65536) return value;
   } catch (_) { /* no file yet */ }
   return null;
@@ -168,7 +168,7 @@ let recovering = null;
 async function recoverEmbeddedDatabase() {
   if (recovering) return recovering;
   recovering = (async () => {
-    const { ensureDatabase } = require('./scripts/ensure-database');
+    const { ensureDatabase } = require('../scripts/ensure-database');
     console.error('[db] Database connection lost; restarting embedded PostgreSQL...');
     try {
       await ensureDatabase();

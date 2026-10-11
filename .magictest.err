@@ -1,0 +1,1 @@
+WARNING: SMTP is not configured. Emails will be logged instead of sent. Set SMTP_HOST, SMTP_USER, SMTP_PASS to enable delivery.

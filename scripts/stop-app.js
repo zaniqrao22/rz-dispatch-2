@@ -19,7 +19,7 @@ const fs = require('fs');
 const net = require('net');
 
 const ROOT = path.join(__dirname, '..');
-const PGDATA = path.join(ROOT, '.pgdata');
+const PGDATA = path.join(ROOT, 'database', 'pgdata');
 const PID_FILE = path.join(ROOT, '.watchdog.pid');
 
 function listeningPid(port) {

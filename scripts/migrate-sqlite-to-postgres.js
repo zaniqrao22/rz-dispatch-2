@@ -19,15 +19,15 @@ const path = require('path');
 require('dotenv').config();
 const Database = require('better-sqlite3');
 
-const DATA_FILE = path.join(__dirname, '..', '.data', 'rz_dispatch.db');
+const DATA_FILE = path.join(__dirname, '..', 'database', 'sqlite', 'rz_dispatch.db');
 
 if (!fs.existsSync(DATA_FILE)) {
   console.error(`SQLite database not found at ${DATA_FILE}. Nothing to migrate.`);
   process.exit(1);
 }
 
-const { setInitializer, transaction, close } = require('../db');
-const { initializeDatabase } = require('../server');
+const { setInitializer, transaction, close } = require('../backend/db');
+const { initializeDatabase } = require('../backend/server');
 
 // Tables in dependency order. The primary key is used for ON CONFLICT upserts.
 const TABLES = [

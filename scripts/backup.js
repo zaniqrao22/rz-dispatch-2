@@ -4,11 +4,11 @@ const path = require('path');
 
 async function main() {
   const { ensureDatabase } = require('./ensure-database');
-  const { initializeDatabase } = require('../server');
+  const { initializeDatabase } = require('../backend/server');
   await ensureDatabase();
   await initializeDatabase();
 
-  const db = require('../db');
+  const db = require('../backend/db');
 
   const tablesResult = await db.all(`SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'schema_migrations' ORDER BY tablename`);
   const tables = tablesResult.map((row) => row.tablename);

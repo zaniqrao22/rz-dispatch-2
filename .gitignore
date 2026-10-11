@@ -1,6 +1,9 @@
 node_modules/
 .data/
 .pgdata/
+.database/
+database/sqlite/
+database/pgdata/
 .pgdata-smoke/
 .env
 .env.production

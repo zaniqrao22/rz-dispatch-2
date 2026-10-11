@@ -26,7 +26,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 
-const SERVER = path.join(__dirname, '..', 'server.js');
+const SERVER = path.join(__dirname, '..', 'backend', 'server.js');
 const LOG_FILE = path.join(__dirname, '..', '.backend.log');
 const PID_FILE = path.join(__dirname, '..', '.watchdog.pid');
 const PORT = Number(process.env.PORT) || 8000;

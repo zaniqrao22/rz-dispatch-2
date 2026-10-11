@@ -20,7 +20,7 @@ const {
   getZoneConfigurations,
   optimizeDispatchRoute,
   getVehicles
-} = require('../server');
+} = require('../backend/server');
 
 test('license system creates a valid key and active record', async () => {
   const key = generateLicenseKey();

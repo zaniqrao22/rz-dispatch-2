@@ -15,8 +15,8 @@ function finish(code, payload) {
 
 async function main() {
   const PROJ = process.env.PROJ_DIR;
-  const serverModule = require(path.join(PROJ, 'server'));
-  const db = require(path.join(PROJ, 'db'));
+  const serverModule = require(path.join(PROJ, 'backend', 'server'));
+  const db = require(path.join(PROJ, 'backend', 'db'));
   const Stripe = require(path.join(PROJ, 'node_modules', 'stripe'));
   const { app, stripe } = serverModule;
   if (!stripe) throw new Error('stripe was not constructed with STRIPE_SECRET_KEY');

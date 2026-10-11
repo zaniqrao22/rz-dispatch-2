@@ -48,7 +48,7 @@ try {
     createLicenseRecord,
     lookupCustomerOrder,
     getActivity
-  } = await import('../server.js');
+  } = await import('../backend/server.js');
 
   await initializeDatabase();
 
