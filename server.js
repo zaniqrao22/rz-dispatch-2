@@ -11,6 +11,8 @@ const Stripe = require('stripe');
 const { sendMail, enabled: mailerEnabled } = require('./mailer');
 const { welcomeEmail, verifyEmailEmail, passwordResetEmail } = require('./mailer_templates');
 const realtime = require('./realtime-hub');
+const portalAuthModule = require('./portal-auth');
+let portalAuth = null;
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8000;
@@ -195,17 +197,33 @@ app.post('/api/auth/register', async (req, res) => {
   const role = Object.prototype.hasOwnProperty.call(mapping, requestedRole) ? mapping[requestedRole] : 'customer';
   const needsApproval = role !== 'customer';
 
+  // Multi-tenant RBAC: a customer belongs to a company account (tenant) that
+  // is typed as shipper / broker / receiver so data cannot leak across clients.
+  const requestedCompanyRole = String(req.body?.company_role || req.body?.account_type || '').trim().toLowerCase();
+  const companyRole = ['shipper', 'broker', 'receiver'].includes(requestedCompanyRole) ? requestedCompanyRole : (role === 'customer' ? 'shipper' : null);
+  const companyName = String(req.body?.company_name || '').trim() || null;
+
   const userId = crypto.randomUUID();
   const passwordHash = bcrypt.hashSync(password, 12);
-  await db.run('INSERT INTO users (id, email, password_hash, role, status, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    userId, email, passwordHash, role, needsApproval ? 'pending' : 'approved', new Date().toISOString());
+  await db.run('INSERT INTO users (id, email, password_hash, role, company_role, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    userId, email, passwordHash, role, companyRole, needsApproval ? 'pending' : 'approved', new Date().toISOString());
 
   if (!needsApproval) {
     // Customer accounts are approved instantly so they can start booking,
     // tracking orders, and messaging dispatch without waiting on a dispatcher.
-    const token = signToken({ id: userId, email, role, driverId: null });
+    const fresh = await db.get('SELECT * FROM users WHERE id = ?', userId);
+    const account = portalAuth ? await portalAuth.ensureCompanyAccount(fresh, companyName) : null;
+    const session = portalAuth ? await portalAuth.createSession(fresh, req) : null;
+    if (portalAuth && session) portalAuth.setSessionCookie(res, session.id);
+    const token = signToken({ id: userId, email, role, driverId: null, sid: session?.id, companyAccountId: account?.id || null });
     const settings = await getUserSettings({ id: userId, email });
-    res.json({ token, user: { id: userId, email, role, driverId: null, name: settings.name } });
+    res.json({
+      token,
+      sessionId: session?.id || null,
+      refreshToken: session?.refreshToken || null,
+      expiresIn: '7d',
+      user: { id: userId, email, role, driverId: null, companyRole, companyAccountId: account?.id || null, name: settings.name }
+    });
   } else {
     res.status(201).json({ success: true, pending: true, message: 'Your account has been created and is awaiting dispatcher approval. You will be able to sign in once a dispatcher approves it.' });
   }
@@ -270,11 +288,17 @@ app.get('/api/customer/access', async (req, res) => {
   if (user.status === 'rejected') {
     return res.status(403).json({ error: 'Your registration request was declined.' });
   }
-  const token = signToken({ id: user.id, email: user.email, role: user.role, driverId: user.driver_id });
+  const session = portalAuth ? await portalAuth.createSession(user, req) : null;
+  if (portalAuth && session) portalAuth.setSessionCookie(res, session.id);
+  const account = portalAuth ? await portalAuth.ensureCompanyAccount(user) : null;
+  const token = signToken({ id: user.id, email: user.email, role: user.role, driverId: user.driver_id, sid: session?.id, companyAccountId: account?.id || user.company_account_id });
   const settings = await getUserSettings(user);
   res.json({
     token,
-    user: { id: user.id, email: user.email, role: user.role, driverId: user.driver_id, name: settings.name }
+    sessionId: session?.id || null,
+    refreshToken: session?.refreshToken || null,
+    expiresIn: '7d',
+    user: { id: user.id, email: user.email, role: user.role, driverId: user.driver_id, name: settings.name, companyAccountId: account?.id || user.company_account_id || null }
   });
 });
 
@@ -312,8 +336,18 @@ app.post('/api/admin/customers/access-link', requireAuth, isAdmin, async (req, r
 app.post('/api/auth/login', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
+
+  // Flow B brute-force protection: lock an account for 15 minutes after 5
+  // failed attempts inside a 15-minute window (per-account, per the spec).
+  const lock = portalAuth ? await portalAuth.checkLoginLock(email) : { locked: false };
+  if (lock.locked) {
+    res.setHeader('Retry-After', String(lock.retryAfterSeconds || 900));
+    return res.status(429).json({ error: 'Too many failed sign-in attempts. Please try again in a few minutes.', retryAfterSeconds: lock.retryAfterSeconds || 900 });
+  }
+
   const user = await db.get('SELECT * FROM users WHERE email = ?', email);
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    if (portalAuth && email) await portalAuth.recordLoginFailure(email);
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
 
@@ -324,10 +358,33 @@ app.post('/api/auth/login', async (req, res) => {
   if (user.status === 'rejected') {
     return res.status(403).json({ error: 'Your registration request was declined.' });
   }
+  if (user.account_status === 'suspended') {
+    return res.status(403).json({ error: 'Your company account is suspended. Contact your dispatcher.' });
+  }
 
-  const token = signToken({ id: user.id, email: user.email, role: user.role, driverId: user.driver_id });
+  if (portalAuth) await portalAuth.clearLoginFailures(email);
+  // Multi-device sessions: a server-side session row is created so this device
+  // can be signed out independently, and logout-all revokes every device.
+  const session = portalAuth ? await portalAuth.createSession(user, req) : null;
+  if (portalAuth && session) portalAuth.setSessionCookie(res, session.id);
+  const token = signToken({ id: user.id, email: user.email, role: user.role, driverId: user.driver_id, sid: session?.id, companyAccountId: user.company_account_id });
   const settings = await getUserSettings(user);
-  res.json({ token, user: { id: user.id, email: user.email, role: user.role, driverId: user.driver_id, name: settings.name } });
+  const account = portalAuth ? await portalAuth.ensureCompanyAccount(user) : null;
+  res.json({
+    token,
+    sessionId: session?.id || null,
+    refreshToken: session?.refreshToken || null,
+    expiresIn: '7d',
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      driverId: user.driver_id,
+      name: settings.name,
+      companyAccountId: account?.id || user.company_account_id || null,
+      accountStatus: user.account_status || 'active'
+    }
+  });
 });
 
 app.get('/api/operator/jobs', requireAuth, requireOperator, async (req, res) => {
@@ -595,6 +652,25 @@ app.post('/api/license/activate', requireAuth, async (req, res) => {
 
   return res.status(404).json({ error: 'License not found or not active.' });
 });
+
+// Customer Portal authentication: session management, passwordless OTP,
+// brute-force lockout, multi-tenant company accounts and the /portal guard.
+// Registered BEFORE the global `/api` auth gate below so that the public
+// endpoints (otp/request, otp/verify, session/refresh) and the /portal, /login
+// page routes are reachable without a pre-existing token.
+portalAuth = portalAuthModule.create({
+  db,
+  jwt,
+  signToken,
+  sendMail,
+  mailerEnabled,
+  emailName,
+  isEmail,
+  getUserSettings,
+  PUBLIC_URL,
+  requireAuth
+});
+portalAuth.registerRoutes(app);
 
 app.use('/api', (req, res, next) => {
   const normalizedPath = req.path.replace(/\/+$/, '');
@@ -1661,7 +1737,8 @@ type TEXT NOT NULL,
     `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS is_default INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS notify_inapp INTEGER NOT NULL DEFAULT 1`,
     `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS vehicle_type TEXT`,
-    `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS passengers INTEGER NOT NULL DEFAULT 1`
+    `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS passengers INTEGER NOT NULL DEFAULT 1`,
+    ...portalAuthModule.schemaStatements
   ];
 
   // Detect whether the admin-approval `status` column already exists BEFORE
@@ -1769,19 +1846,47 @@ function signToken(payload) {
 
 async function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
-  if (!header.startsWith('Bearer ')) return res.status(401).json({ error: 'Authentication required.' });
-
+  const userColumns = 'SELECT id, email, role, driver_id as driverId, status, company_account_id as companyAccountId, company_role as companyRole, account_status as accountStatus FROM users WHERE id = ?';
   try {
-    const token = header.slice(7);
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await db.get('SELECT id, email, role, driver_id as driverId, status FROM users WHERE id = ?', decoded.id || decoded.sub);
-    if (!user) return res.status(401).json({ error: 'Invalid session.' });
-    // Admin approval workflow: a pending/rejected account's existing token is
-    // worthless, even if it was issued before the status changed.
-    if (user.status === 'pending') return res.status(403).json({ error: 'Your account is currently awaiting admin approval.' });
-    if (user.status === 'rejected') return res.status(403).json({ error: 'Your registration request was declined.' });
-    req.user = user;
-    next();
+    if (header.startsWith('Bearer ')) {
+      const token = header.slice(7);
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const user = await db.get(userColumns, decoded.id || decoded.sub);
+      if (!user) return res.status(401).json({ error: 'Invalid session.' });
+      // Admin approval workflow: a pending/rejected account's existing token is
+      // worthless, even if it was issued before the status changed.
+      if (user.status === 'pending') return res.status(403).json({ error: 'Your account is currently awaiting admin approval.' });
+      if (user.status === 'rejected') return res.status(403).json({ error: 'Your registration request was declined.' });
+      if (user.accountStatus === 'suspended') return res.status(403).json({ error: 'Your company account is suspended. Contact your dispatcher.' });
+      // Server-side session check: a token whose session was revoked (device
+      // logout) or expired is rejected even though the JWT itself is valid.
+      if (decoded.sid && portalAuth) {
+        const session = await portalAuth.validateSession(decoded.sid);
+        if (!session) return res.status(401).json({ error: 'Your session was signed out. Please sign in again.' });
+        req.sessionId = decoded.sid;
+        req.session = session;
+      }
+      req.user = user;
+      return next();
+    }
+    // No bearer token: fall back to the httpOnly session cookie so that
+    // server-rendered /portal pages (and same-origin fetches) authenticate.
+    if (portalAuth) {
+      const sessionId = portalAuth.getSessionIdFromRequest(req);
+      if (sessionId) {
+        const session = await portalAuth.validateSession(sessionId);
+        if (session) {
+          const user = await db.get(userColumns, session.user_id);
+          if (user && user.status !== 'pending' && user.status !== 'rejected' && user.accountStatus !== 'suspended') {
+            req.sessionId = sessionId;
+            req.session = session;
+            req.user = user;
+            return next();
+          }
+        }
+      }
+    }
+    return res.status(401).json({ error: 'Authentication required.' });
   } catch (error) {
     res.status(401).json({ error: 'Session expired or invalid.' });
   }
