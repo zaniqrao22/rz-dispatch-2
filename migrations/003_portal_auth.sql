@@ -2,7 +2,8 @@
 -- Customer Portal authentication, multi-tenant RBAC and session management.
 -- Idempotent: safe to run repeatedly. Applied automatically on the first
 -- database access via server.js `initializeDatabase`, and also by
--- `npm run db:migrate` (scripts/migrate.js splits on ';').
+-- `npm run db:migrate` (scripts/migrate.js splits statements on semicolons,
+-- so avoid literal semicolons inside comments and string literals).
 
 CREATE TABLE IF NOT EXISTS company_accounts (
   id TEXT PRIMARY KEY,

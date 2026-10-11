@@ -25,7 +25,12 @@ async function runMigrations() {
     const existing = await db.get('SELECT name FROM schema_migrations WHERE name = ?', file);
     if (existing) { skipped.push(file); continue; }
     const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
+    // Strip `--` line comments before splitting so semicolons that appear in
+    // comments (or documentation examples) do not create broken statements.
     const statements = sql
+      .split('\n')
+      .map((line) => line.replace(/--.*$/, ''))
+      .join('\n')
       .split(';')
       .map((statement) => statement.trim())
       .filter((statement) => statement.length > 0);

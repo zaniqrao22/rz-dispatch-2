@@ -223,6 +223,45 @@ function setAuthToken(token, remember = true) {
   if (token) storage.setItem(AUTH_TOKEN_KEY, token);
 }
 
+const SESSION_ID_KEY = 'rz_session_id';
+const REFRESH_TOKEN_KEY = 'rz_refresh_token';
+
+// Persist the server-side session handle so the short-lived access token can be
+// silently renewed without forcing the user to sign in again.
+function savePortalSession(payload) {
+  if (!payload) return;
+  if (payload.sessionId) localStorage.setItem(SESSION_ID_KEY, payload.sessionId);
+  if (payload.refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, payload.refreshToken);
+}
+
+function clearPortalSession() {
+  localStorage.removeItem(SESSION_ID_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+async function refreshPortalSession() {
+  const sessionId = localStorage.getItem(SESSION_ID_KEY) || '';
+  const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY) || '';
+  if (!sessionId || !refreshToken) return false;
+  try {
+    if (!apiBase) await detectApiBase();
+    const response = await fetch(apiUrl('/api/auth/session/refresh'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, refreshToken })
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.token) { clearPortalSession(); return false; }
+    const remember = localStorage.getItem(AUTH_TOKEN_KEY) !== null;
+    setAuthToken(payload.token, remember);
+    savePortalSession(payload);
+    if (payload.user) currentUser = payload.user;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function getStoredLicenseKey() {
   return localStorage.getItem(LICENSE_KEY_STORE) || '';
 }
@@ -287,8 +326,16 @@ async function fetchJson(url, options = {}) {
 
   const response = await fetch(apiUrl(url), { ...options, headers });
   if (response.status === 401) {
+    // Access tokens are short-lived; renew once with the stored refresh token
+    // before bouncing the user back to the sign-in screen.
+    if (!options._sessionRetry && await refreshPortalSession()) {
+      const retryOptions = { ...options };
+      delete retryOptions._sessionRetry;
+      return fetchJson(url, { ...retryOptions, _sessionRetry: true });
+    }
     if (window.RZRealtime) window.RZRealtime.disconnect();
     setAuthToken('');
+    clearPortalSession();
     renderAuthScreen();
     throw new Error('Your session expired. Please log in again.');
   }
@@ -396,6 +443,47 @@ async function completeLifetimePurchase(sessionId) {
   }
 }
 
+async function requestEmailCode(email) {
+  if (!apiBase) await detectApiBase();
+  const response = await fetch(apiUrl('/api/auth/otp/request'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email })
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || 'We could not send a sign-in code.');
+  return payload;
+}
+
+async function verifyEmailCode(email, code) {
+  if (!apiBase) await detectApiBase();
+  const response = await fetch(apiUrl('/api/auth/otp/verify'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, code })
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || 'That sign-in code is not correct.');
+  return payload;
+}
+
+// Revoke every session attached to this account, then return to sign-in. Used
+// to boot a lost/stolen device while still keeping the account usable.
+async function signOutAllDevices() {
+  try {
+    const response = await fetchJson('/api/auth/logout-all', { method: 'POST' });
+    if (response.ok) showToast('Signed out of all devices.');
+  } catch (_) {
+    // Even if the request fails, still drop the local session below.
+  }
+  if (window.RZRealtime) window.RZRealtime.disconnect();
+  setAuthToken('');
+  clearPortalSession();
+  currentUser = null;
+  setAppMode('customer');
+  renderAuthScreen();
+}
+
 function renderAuthScreen() {
   if (!main) return;
   setAppMode('dispatcher');
@@ -444,6 +532,29 @@ function renderAuthScreen() {
           </div>
           <p id="authError" class="form-error" role="alert"></p>
         </form>
+        <div class="auth-alt">
+          <span class="auth-alt-divider">or</span>
+          <button type="button" class="outline-button" id="otpStartToggle">Email me a sign-in code</button>
+        </div>
+        <div id="otpPanel" class="auth-otp" style="display:none;">
+          <p class="view-subtitle" style="margin:0 0 12px;">We'll email you a 6-digit code. No password needed.</p>
+          <label class="auth-field">Email
+            <input id="otpEmail" type="email" placeholder="you@company.com" autocomplete="email" class="auth-input" />
+          </label>
+          <div class="auth-actions">
+            <button type="button" class="dispatch-button" id="otpSend">Send me a code</button>
+          </div>
+          <div id="otpCodeStep" style="display:none;">
+            <label class="auth-field">6-digit code
+              <input id="otpCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" class="auth-input" />
+            </label>
+            <div class="auth-actions">
+              <button type="button" class="dispatch-button" id="otpVerify">Verify &amp; sign in</button>
+            </div>
+          </div>
+          <button type="button" class="text-button auth-otp-back" id="otpBack">← Back to password sign in</button>
+          <p id="otpError" class="form-error" role="alert"></p>
+        </div>
       </section>
     </div>
   `;
@@ -521,12 +632,70 @@ function renderAuthScreen() {
       if (remember) sessionStorage.removeItem('rz_dispatch_remember');
       else sessionStorage.setItem('rz_dispatch_remember', '0');
       setAuthToken(payload.token, remember);
+      savePortalSession(payload);
       currentUser = payload.user || null;
       updateSidebarUser();
       resultText.textContent = '';
       routeByRole();
     } catch (error) {
       resultText.textContent = error.message;
+    }
+  });
+
+  document.getElementById('otpStartToggle')?.addEventListener('click', () => {
+    const form = document.getElementById('authForm');
+    const panel = document.getElementById('otpPanel');
+    const emailField = document.getElementById('otpEmail');
+    if (emailField) emailField.value = document.getElementById('authEmail')?.value || '';
+    if (form) form.style.display = 'none';
+    if (panel) panel.style.display = 'grid';
+    emailField?.focus();
+  });
+
+  document.getElementById('otpBack')?.addEventListener('click', () => {
+    const form = document.getElementById('authForm');
+    const panel = document.getElementById('otpPanel');
+    if (panel) panel.style.display = 'none';
+    if (form) form.style.display = '';
+  });
+
+  document.getElementById('otpSend')?.addEventListener('click', async () => {
+    const email = String(document.getElementById('otpEmail')?.value || '').trim();
+    const errorEl = document.getElementById('otpError');
+    const codeStep = document.getElementById('otpCodeStep');
+    if (!email) { if (errorEl) errorEl.textContent = 'Enter your email address.'; return; }
+    try {
+      if (errorEl) errorEl.textContent = '';
+      const payload = await requestEmailCode(email);
+      if (codeStep) codeStep.style.display = 'grid';
+      const codeInput = document.getElementById('otpCode');
+      if (payload.devCode) {
+        if (codeInput) codeInput.value = String(payload.devCode);
+        showToast(`Dev sign-in code: ${payload.devCode}`);
+      } else {
+        showToast(payload.emailed === false ? 'Email delivery is not configured on the server.' : 'If that email has an account, a sign-in code is on its way.');
+      }
+      codeInput?.focus();
+    } catch (error) {
+      if (errorEl) errorEl.textContent = error.message;
+    }
+  });
+
+  document.getElementById('otpVerify')?.addEventListener('click', async () => {
+    const email = String(document.getElementById('otpEmail')?.value || '').trim();
+    const code = String(document.getElementById('otpCode')?.value || '').trim();
+    const errorEl = document.getElementById('otpError');
+    if (!email || code.length !== 6) { if (errorEl) errorEl.textContent = 'Enter your email and the 6-digit code.'; return; }
+    try {
+      if (errorEl) errorEl.textContent = '';
+      const payload = await verifyEmailCode(email, code);
+      setAuthToken(payload.token, true);
+      savePortalSession(payload);
+      currentUser = payload.user || null;
+      updateSidebarUser();
+      routeByRole();
+    } catch (error) {
+      if (errorEl) errorEl.textContent = error.message;
     }
   });
 }
@@ -1649,6 +1818,8 @@ async function renderCustomerHome() {
 function signOutToCustomer() {
   if (window.RZRealtime) window.RZRealtime.disconnect();
   setAuthToken('');
+  clearPortalSession();
+  currentUser = null;
   localStorage.setItem(MODE_KEY, 'customer');
   setAppMode('customer');
   renderCustomerHome();
@@ -1676,6 +1847,8 @@ async function fillCustomerTrustStats() {
 function signOutToDispatcher() {
   if (window.RZRealtime) window.RZRealtime.disconnect();
   setAuthToken('');
+  clearPortalSession();
+  currentUser = null;
   localStorage.setItem(MODE_KEY, 'dispatcher');
   setAppMode('dispatcher');
   window.location.hash = 'dispatch';
@@ -1811,9 +1984,10 @@ function renderCustomerAccountTab() {
   if (customerAccountTab === 'profile') tabBody = customerProfileTabHTML(profileSprout(profile));
   if (customerAccountTab === 'places') tabBody = customerPlacesTabHTML(addresses || []);
   if (customerAccountTab === 'receipts') tabBody = customerReceiptsTabHTML(receipts || [], profile);
-  main.innerHTML = `<div class="customer-shell customer-panel-shell"><div class="customer-back-row"><button type="button" class="outline-button" id="customerAccountBack">← Back home</button><button type="button" class="outline-button" id="customerAccountSignOut">Sign out</button></div><section class="panel customer-settings-panel customer-account-panel"><div class="account-tabs" role="tablist">${tabButtons}</div><div class="account-tab-body">${tabBody}</div></section></div>`;
+  main.innerHTML = `<div class="customer-shell customer-panel-shell"><div class="customer-back-row"><button type="button" class="outline-button" id="customerAccountBack">← Back home</button><button type="button" class="outline-button" id="customerAccountSignOut">Sign out</button><button type="button" class="outline-button" id="customerAccountSignOutAll">Sign out all devices</button></div><section class="panel customer-settings-panel customer-account-panel"><div class="account-tabs" role="tablist">${tabButtons}</div><div class="account-tab-body">${tabBody}</div></section></div>`;
   document.getElementById('customerAccountBack')?.addEventListener('click', renderCustomerHome);
   document.getElementById('customerAccountSignOut')?.addEventListener('click', signOutToCustomer);
+  document.getElementById('customerAccountSignOutAll')?.addEventListener('click', signOutAllDevices);
   main.querySelectorAll('.account-tab').forEach((button) => {
     button.addEventListener('click', () => renderCustomerAccountPortal(button.dataset.tab));
   });
@@ -2888,6 +3062,7 @@ async function renderSettings() {
         <button class="outline-button" id="verifyEmailButton" type="button">Verify email</button>
         <button class="dispatch-button" id="purchaseLicenseButton" type="button" ${paymentsConfigured ? '' : 'hidden'}>Purchase license</button>
         <button class="outline-button" id="signOutButton" type="button">Sign out</button>
+        <button class="outline-button" id="signOutAllButton" type="button">Sign out all devices</button>
       </div>
     </div>
 
@@ -2995,11 +3170,17 @@ async function renderSettings() {
     }
   });
 
-  document.getElementById('signOutButton')?.addEventListener('click', () => {
+  document.getElementById('signOutButton')?.addEventListener('click', async () => {
+    try { await fetchJson('/api/auth/logout', { method: 'POST' }); } catch (_) { /* still drop local session */ }
+    if (window.RZRealtime) window.RZRealtime.disconnect();
     setAuthToken('');
+    clearPortalSession();
+    currentUser = null;
     renderAuthScreen();
     showToast('Signed out');
   });
+
+  document.getElementById('signOutAllButton')?.addEventListener('click', signOutAllDevices);
 
   document.getElementById('purchaseLicenseButton')?.addEventListener('click', beginLifetimePurchase);
 

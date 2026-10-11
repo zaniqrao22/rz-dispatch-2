@@ -398,3 +398,16 @@
 }
 
 .map-tile-note{position:absolute;left:50%;transform:translateX(-50%);bottom:14px;z-index:500;max-width:88%;padding:9px 14px;border-radius:8px;background:rgba(15,23,42,.88);color:#fff;font-size:12px;line-height:1.45;text-align:center;pointer-events:none}
+
+/* ===== Passwordless sign-in (email code) ===== */
+.auth-alt{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:18px}
+.auth-alt-divider{display:flex;align-items:center;gap:12px;width:100%;color:#94a3b8;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.auth-alt-divider::before,.auth-alt-divider::after{content:'';flex:1;height:1px;background:#e2e8e5}
+.auth-alt .outline-button{width:100%;justify-content:center;padding:12px 16px}
+.auth-otp{display:grid;gap:16px;margin-top:18px}
+.auth-otp .auth-actions{margin-top:0}
+.auth-otp .auth-actions .dispatch-button{flex:1;justify-content:center}
+.auth-otp #otpCodeStep{display:grid;gap:16px}
+.auth-otp-back{align-self:center;background:none;border:none;color:#1e3a8a;text-decoration:underline;cursor:pointer;padding:0;font:inherit;font-size:12px}
+.auth-otp #otpCode{letter-spacing:.4em;font-size:20px;text-align:center;font-weight:700}
+.auth-otp .form-error{text-align:center;margin-top:0}
