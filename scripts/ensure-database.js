@@ -101,6 +101,38 @@ async function waitForPortClosed(host) {
   }
 }
 
+/**
+ * Create the application database if it does not exist yet.
+ *
+ * embedded-postgres's createDatabase() only calls client.end() on success;
+ * when CREATE DATABASE throws ("already exists") the pg client is leaked
+ * still connected with a console.error 'error' listener, which later dumped
+ * raw connection-error stack traces every time PostgreSQL stopped. So check
+ * for the database first and only invoke createDatabase when it is missing.
+ */
+async function ensureDatabaseExists(pg, database) {
+  const client = pg.getPgClient('postgres');
+  try {
+    await client.connect();
+    const result = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [database]);
+    if (result.rowCount > 0) {
+      await client.end();
+      return true;
+    }
+  } catch (_) {
+    // Could not check -- fall through and let CREATE DATABASE decide.
+  }
+  try { await client.end(); } catch (_) { /* already closed */ }
+
+  try {
+    await pg.createDatabase(database);
+    return false;
+  } catch (_) {
+    // Database already exists (or raced) -- fine.
+    return true;
+  }
+}
+
 async function ensureDatabase() {
   // If a connection string is supplied, assume PostgreSQL is managed
   // externally; nothing for us to start here.
@@ -142,7 +174,11 @@ async function ensureDatabase() {
     authMethod: 'scram-sha-256',
     port: PORT,
     persistent: true,
-    onLog: () => {}
+    onLog: () => {},
+    // embedded-postgres defaults this to raw console.error, which dumps whole
+    // pg error objects (FATAL/ECONNRESET/connection-terminated) unprefixed
+    // whenever the cluster goes down. Keep them labelled instead.
+    onError: (error) => console.error('[postgres] embedded client error:', error?.message || error)
   });
 
   const alreadyInitialised = fs.existsSync(path.join(PGDATA, 'PG_VERSION'));
@@ -158,16 +194,12 @@ async function ensureDatabase() {
   await Promise.race([
     pg.start(),
     new Promise((_, reject) => setTimeout(
-      () => reject(new Error(`Timed out after ${READY_TIMEOUT_MS}ms waiting for embedded PostgreSQL to start. Check the port ${PORT} and the .pgdata folder.`)),
+      () => reject(new Error(`Timed out after ${READY_TIMEOUT_MS}ms waiting for embedded PostgreSQL to start. Check the port ${PORT} and the database/pgdata folder.`)),
       READY_TIMEOUT_MS
     ))
   ]);
 
-  try {
-    await pg.createDatabase(database);
-  } catch (_) {
-    // Database already exists -- fine.
-  }
+  await ensureDatabaseExists(pg, database);
 
   // Confirm the freshly started cluster really answers queries before we
   // consider recovery successful; if not, throw so the caller can retry.
@@ -177,4 +209,4 @@ async function ensureDatabase() {
   console.log(`Embedded PostgreSQL started on 127.0.0.1:${PORT}.`);
 }
 
-module.exports = { ensureDatabase, isPortOpen, usesExternalDatabase, getPort: () => PORT };
+module.exports = { ensureDatabase, ensureDatabaseExists, isPortOpen, usesExternalDatabase, getPort: () => PORT };

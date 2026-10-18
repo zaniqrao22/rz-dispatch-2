@@ -30,7 +30,9 @@ async function main() {
     authMethod: 'scram-sha-256',
     port: PORT,
     persistent: true,
-    onLog: () => {}
+    onLog: () => {},
+    // Keep embedded-postgres client errors labelled instead of raw console.error dumps.
+    onError: (error) => console.error('[postgres] embedded client error:', error?.message || error)
   });
 
   const alreadyInitialised = fs.existsSync(path.join(PGDATA, 'PG_VERSION'));
@@ -42,13 +44,11 @@ async function main() {
   }
   await pg.start();
 
-  try {
-    await pg.createDatabase(DATABASE);
-    console.log(`Database "${DATABASE}" ready.`);
-  } catch (error) {
-    // Database already exists (or is the default) — not an error.
-    console.log(`Database "${DATABASE}" already exists.`);
-  }
+  // Check first: embedded-postgres leaks its pg client when CREATE DATABASE
+  // throws "already exists", which later printed raw connection-error dumps.
+  const { ensureDatabaseExists } = require('./ensure-database');
+  const existed = await ensureDatabaseExists(pg, DATABASE);
+  console.log(existed ? `Database "${DATABASE}" already exists.` : `Database "${DATABASE}" ready.`);
 
   console.log(`Embedded PostgreSQL is running on 127.0.0.1:${PORT}; press Ctrl+C to stop.`);
 

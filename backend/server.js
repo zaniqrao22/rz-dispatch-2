@@ -1390,6 +1390,11 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'API route not found
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
+  // A client navigating away mid-request is normal traffic, not a server
+  // fault -- answer quietly instead of flooding the backend log with errors.
+  if (err?.type === 'request.aborted' || err?.message === 'request aborted') {
+    return res.status(499).end();
+  }
   console.error('[backend] Request error:', err?.message || err);
   res.status(500).json({ error: 'Something went wrong on the server. Please try again.' });
 });
