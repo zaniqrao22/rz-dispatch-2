@@ -411,3 +411,12 @@
 .auth-otp-back{align-self:center;background:none;border:none;color:#1e3a8a;text-decoration:underline;cursor:pointer;padding:0;font:inherit;font-size:12px}
 .auth-otp #otpCode{letter-spacing:.4em;font-size:20px;text-align:center;font-weight:700}
 .auth-otp .form-error{text-align:center;margin-top:0}
+
+/* ===== Legal footer links (Terms / Privacy) ===== */
+.legal-footer{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid #e2e8e5;font-size:11px;color:#94a3b8}
+.legal-footer a{color:#6b7c78;text-decoration:none;font-weight:600}
+.legal-footer a:hover{color:#0f8f7f;text-decoration:underline}
+
+/* ===== Unavailable channel state (e.g. SMS without a provider) ===== */
+.settings-checkbox.is-disabled{opacity:.6}
+.settings-checkbox.is-disabled small{color:#b45309}

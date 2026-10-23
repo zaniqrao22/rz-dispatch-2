@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20.x', '22.x']
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rz_dispatch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/rz_dispatch
+      JWT_SECRET: ci-only-secret-do-not-use-in-production
+      ADMIN_EMAIL: admin@rzdispatch.local
+      ADMIN_PASSWORD: Demo@12345
+      REQUIRE_LICENSE: 'false'
+      # Puppeteer is an optional devDependency; skip downloading a browser so
+      # `npm ci` stays fast. The unit/e2e suites do not launch a browser here.
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in $(seq 1 30); do
+            if pg_isready -h 127.0.0.1 -p 5432 -U postgres >/dev/null 2>&1; then
+              echo "PostgreSQL is ready."
+              exit 0
+            fi
+            echo "Waiting for PostgreSQL ($i/30)..."
+            sleep 2
+          done
+          echo "PostgreSQL did not become ready in time." >&2
+          exit 1
+
+      - name: Syntax check (backend + frontend)
+        run: |
+          node -c backend/server.js
+          node -c backend/portal-auth.js
+          node -c backend/audit.js
+          node -c backend/sms.js
+          node -c backend/twofactor.js
+          node -c frontend/js/app.js
+
+      - name: Run test suite
+        run: npm test
+
+  lint-html:
+    name: HTML sanity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Verify legal pages exist
+        run: |
+          test -f frontend/terms.html
+          test -f frontend/privacy.html
+          test -f frontend/index.html

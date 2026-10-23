@@ -225,6 +225,8 @@ function setAuthToken(token, remember = true) {
 
 const SESSION_ID_KEY = 'rz_session_id';
 const REFRESH_TOKEN_KEY = 'rz_refresh_token';
+const CSRF_TOKEN_KEY = 'rz_csrf_token';
+let pendingTwoFactorChallenge = '';
 
 // Persist the server-side session handle so the short-lived access token can be
 // silently renewed without forcing the user to sign in again.
@@ -232,11 +234,13 @@ function savePortalSession(payload) {
   if (!payload) return;
   if (payload.sessionId) localStorage.setItem(SESSION_ID_KEY, payload.sessionId);
   if (payload.refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, payload.refreshToken);
+  if (payload.csrfToken) localStorage.setItem(CSRF_TOKEN_KEY, payload.csrfToken);
 }
 
 function clearPortalSession() {
   localStorage.removeItem(SESSION_ID_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
+  localStorage.removeItem(CSRF_TOKEN_KEY);
 }
 
 async function refreshPortalSession() {
@@ -321,6 +325,10 @@ async function fetchJson(url, options = {}) {
     headers['Content-Type'] = 'application/json';
   }
   if (token) headers.Authorization = `Bearer ${token}`;
+  // Double-submit CSRF token: harmless for bearer-token calls, required by the
+  // backend when the request is authenticated via the httpOnly session cookie.
+  const csrfToken = localStorage.getItem(CSRF_TOKEN_KEY) || '';
+  if (csrfToken && !headers['X-CSRF-Token'] && !headers['x-csrf-token']) headers['X-CSRF-Token'] = csrfToken;
   const storedLicense = getStoredLicenseKey();
   if (storedLicense) headers['X-License-Key'] = storedLicense;
 
@@ -531,6 +539,16 @@ function renderAuthScreen() {
             <button type="button" class="outline-button auth-register" id="registerToggle">Create account</button>
           </div>
           <p id="authError" class="form-error" role="alert"></p>
+          <div id="twoFactorStep" style="display:none;">
+            <label class="auth-field">Authenticator code
+              <input id="twoFactorCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="11" placeholder="000000 or backup code" class="auth-input" />
+            </label>
+            <div class="auth-actions">
+              <button type="button" class="dispatch-button" id="twoFactorVerify">Verify &amp; sign in</button>
+            </div>
+            <button type="button" class="text-button" id="twoFactorBack" style="background:none;border:none;color:#1e3a8a;text-decoration:underline;cursor:pointer;padding:0;">← Back</button>
+            <p id="twoFactorError" class="form-error" role="alert"></p>
+          </div>
         </form>
         <div class="auth-alt">
           <span class="auth-alt-divider">or</span>
@@ -614,6 +632,17 @@ function renderAuthScreen() {
       if (!contentType.includes('application/json')) throw new Error('The server is unavailable. Make sure the backend is running on port 8000.');
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Authentication failed');
+      // A password-only login on a 2FA-enabled account returns a challenge
+      // instead of a session; collect the second factor before continuing.
+      if (payload.twoFactorRequired) {
+        pendingTwoFactorChallenge = payload.challenge || '';
+        resultText.textContent = '';
+        const step = document.getElementById('twoFactorStep');
+        if (step) step.style.display = 'grid';
+        const form = document.getElementById('authForm');
+        document.getElementById('twoFactorCode')?.focus();
+        return;
+      }
       if (mode === 'register' && !payload.token) {
         // Dispatcher and driver registrations start 'pending' and wait for admin
         // approval before they can sign in. Customer registrations sign in instantly.
@@ -640,6 +669,43 @@ function renderAuthScreen() {
     } catch (error) {
       resultText.textContent = error.message;
     }
+  });
+
+  document.getElementById('twoFactorVerify')?.addEventListener('click', async () => {
+    const code = String(document.getElementById('twoFactorCode')?.value || '').trim();
+    const errorEl = document.getElementById('twoFactorError');
+    if (!code) { if (errorEl) errorEl.textContent = 'Enter your authenticator or backup code.'; return; }
+    if (!pendingTwoFactorChallenge) { if (errorEl) errorEl.textContent = 'Your session expired. Please sign in again.'; return; }
+    try {
+      if (errorEl) errorEl.textContent = '';
+      if (!apiBase) await detectApiBase();
+      const response = await fetch(apiUrl('/api/auth/2fa/verify'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challenge: pendingTwoFactorChallenge, code })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Verification failed.');
+      const remember = document.getElementById('rememberMe')?.checked ?? true;
+      setAuthToken(payload.token, remember);
+      savePortalSession(payload);
+      currentUser = payload.user || null;
+      updateSidebarUser();
+      pendingTwoFactorChallenge = '';
+      routeByRole();
+    } catch (error) {
+      if (errorEl) errorEl.textContent = error.message;
+    }
+  });
+
+  document.getElementById('twoFactorBack')?.addEventListener('click', () => {
+    pendingTwoFactorChallenge = '';
+    const step = document.getElementById('twoFactorStep');
+    if (step) step.style.display = 'none';
+    const codeInput = document.getElementById('twoFactorCode');
+    if (codeInput) codeInput.value = '';
+    const errorEl = document.getElementById('twoFactorError');
+    if (errorEl) errorEl.textContent = '';
   });
 
   document.getElementById('otpStartToggle')?.addEventListener('click', () => {
@@ -2004,6 +2070,7 @@ function profileSprout(profile) {
     notifyEmail: profile.notifyEmail === undefined ? 1 : Number(profile.notifyEmail),
     notifySms: profile.notifySms === undefined ? 0 : Number(profile.notifySms),
     notifyInapp: profile.notifyInapp === undefined ? 1 : Number(profile.notifyInapp),
+    notifySmsAvailable: profile.notifySmsAvailable === undefined ? true : Boolean(profile.notifySmsAvailable),
     country: profile.country || '',
     locale: profile.locale || 'en-US',
     currency: profile.currency || 'USD',
@@ -2033,7 +2100,7 @@ function customerOptions(list, selected) {
 }
 
 function customerProfileTabHTML(p) {
-  return `<div class="view-header account-view-header"><div><p class="eyebrow">CUSTOMER PROFILE</p><h2>Profile &amp; preferences</h2><p class="view-subtitle">These details are reused on your quotes, saved places, and receipts.</p></div></div><form id="customerAccountProfileForm" class="customer-settings-form"><div class="customer-settings-grid"><label>Full name<input name="name" value="${escapeHTML(p.name)}" placeholder="Maria Lopez" required /></label><label>Email<input name="email" type="email" value="${escapeHTML(p.email)}" placeholder="maria@company.com" required /></label><label>Phone<input name="phone" type="tel" value="${escapeHTML(p.phone)}" placeholder="(415) 555-0191" /></label><label>Country<select name="country">${customerOptions(CUSTOMER_COUNTRIES, p.country)}</select></label><label>Language<select name="locale">${customerOptions(CUSTOMER_LOCALES.map((l) => [l, l]), p.locale)}</select></label><label>Currency<select name="currency">${CUSTOMER_CURRENCIES.map((c) => `<option value="${c}"${p.currency === c ? ' selected' : ''}>${c}</option>`).join('')}</select></label><label>Time zone<select name="timezone">${CUSTOMER_TIMEZONES.map((tz) => `<option value="${escapeHTML(tz)}"${p.timezone === tz ? ' selected' : ''}>${escapeHTML(tz)}</option>`).join('')}</select></label><label>Preferred vehicle<select name="vehicleType"><option value="car"${p.vehicleType === 'car' ? ' selected' : ''}>Car</option><option value="suv"${p.vehicleType === 'suv' ? ' selected' : ''}>SUV</option><option value="van"${p.vehicleType === 'van' ? ' selected' : ''}>Van</option><option value="luxury"${p.vehicleType === 'luxury' ? ' selected' : ''}>Luxury</option></select></label><label>Passengers<input name="passengers" type="number" min="1" max="12" value="${escapeHTML(p.passengers)}" required /></label></div><fieldset class="customer-preferences"><legend>Notifications</legend><label class="customer-checkbox"><input name="notifyEmail" type="checkbox" ${p.notifyEmail ? 'checked' : ''} /> Email updates</label><label class="customer-checkbox"><input name="notifySms" type="checkbox" ${p.notifySms ? 'checked' : ''} /> SMS / text updates</label><label class="customer-checkbox"><input name="notifyInapp" type="checkbox" ${p.notifyInapp ? 'checked' : ''} /> In-app updates</label></fieldset><p class="form-error" id="customerAccountProfileError" role="alert"></p><div class="modal-actions"><button type="button" class="outline-button" id="customerAccountProfileCancel">Back home</button><button type="submit" class="dispatch-button">Save preferences</button></div></form><p class="customer-account-note">Profile, saved places, and receipts are saved to your account and available on any device.</p>`;
+  return `<div class="view-header account-view-header"><div><p class="eyebrow">CUSTOMER PROFILE</p><h2>Profile &amp; preferences</h2><p class="view-subtitle">These details are reused on your quotes, saved places, and receipts.</p></div></div><form id="customerAccountProfileForm" class="customer-settings-form"><div class="customer-settings-grid"><label>Full name<input name="name" value="${escapeHTML(p.name)}" placeholder="Maria Lopez" required /></label><label>Email<input name="email" type="email" value="${escapeHTML(p.email)}" placeholder="maria@company.com" required /></label><label>Phone<input name="phone" type="tel" value="${escapeHTML(p.phone)}" placeholder="(415) 555-0191" /></label><label>Country<select name="country">${customerOptions(CUSTOMER_COUNTRIES, p.country)}</select></label><label>Language<select name="locale">${customerOptions(CUSTOMER_LOCALES.map((l) => [l, l]), p.locale)}</select></label><label>Currency<select name="currency">${CUSTOMER_CURRENCIES.map((c) => `<option value="${c}"${p.currency === c ? ' selected' : ''}>${c}</option>`).join('')}</select></label><label>Time zone<select name="timezone">${CUSTOMER_TIMEZONES.map((tz) => `<option value="${escapeHTML(tz)}"${p.timezone === tz ? ' selected' : ''}>${escapeHTML(tz)}</option>`).join('')}</select></label><label>Preferred vehicle<select name="vehicleType"><option value="car"${p.vehicleType === 'car' ? ' selected' : ''}>Car</option><option value="suv"${p.vehicleType === 'suv' ? ' selected' : ''}>SUV</option><option value="van"${p.vehicleType === 'van' ? ' selected' : ''}>Van</option><option value="luxury"${p.vehicleType === 'luxury' ? ' selected' : ''}>Luxury</option></select></label><label>Passengers<input name="passengers" type="number" min="1" max="12" value="${escapeHTML(p.passengers)}" required /></label></div>            <fieldset class="customer-preferences"><legend>Notifications</legend><label class="customer-checkbox"><input name="notifyEmail" type="checkbox" ${p.notifyEmail ? 'checked' : ''} /> Email updates</label><label class="customer-checkbox"><input name="notifySms" type="checkbox" ${p.notifySms ? 'checked' : ''} ${p.notifySmsAvailable ? '' : 'disabled'} /> SMS / text updates${p.notifySmsAvailable ? '' : '<span class="field-hint"> (not available — no SMS provider configured)</span>'}</label><label class="customer-checkbox"><input name="notifyInapp" type="checkbox" ${p.notifyInapp ? 'checked' : ''} /> In-app updates</label></fieldset><p class="form-error" id="customerAccountProfileError" role="alert"></p><div class="modal-actions"><button type="button" class="outline-button" id="customerAccountProfileCancel">Back home</button><button type="submit" class="dispatch-button">Save preferences</button></div></form><p class="customer-account-note">Profile, saved places, and receipts are saved to your account and available on any device.</p>`;
 }
 
 function customerPlacesTabHTML(addresses) {
@@ -2076,7 +2143,7 @@ function wireCustomerAccountTab(tab) {
       vehicleType: String(formData.get('vehicleType') || 'car').trim(),
       passengers: String(formData.get('passengers') || '2').trim(),
       notifyEmail: formData.get('notifyEmail') ? 1 : 0,
-      notifySms: formData.get('notifySms') ? 1 : 0,
+      notifySms: (p.notifySmsAvailable && formData.get('notifySms')) ? 1 : 0,
       notifyInapp: formData.get('notifyInapp') ? 1 : 0
     };
     const errorBox = document.getElementById('customerAccountProfileError');
@@ -2691,7 +2758,8 @@ async function autoEstimateMiles() {
     if (!response.ok) throw new Error(payload.error || 'Distance lookup failed');
     const milesInput = form.querySelector('[name="miles"]');
     if (milesInput) milesInput.value = Number(payload.miles);
-    showToast(`Distance estimated at ${payload.miles} miles`);
+    const label = payload.source === 'provider' ? 'Driving distance' : 'Estimated distance';
+    showToast(`${label}: ${payload.miles} miles`);
     estimateQuoteFromForm(new Event('submit'));
   } catch (error) {
     showToast(error.message || 'Enter miles manually');
@@ -2929,12 +2997,32 @@ async function renderSettings() {
   summary.workspace = getCurrentWorkspace();
 
   let settings = { name: '', phone: '', email: summary.email || '', role: summary.role || 'owner', notifyEmail: 1, notifySms: 0, notifyInapp: 1 };
+  let channelAvailability = { email: true, sms: false };
   try {
     const response = await fetchJson('/api/settings');
     const payload = await response.json();
     if (response.ok && payload.settings) settings = { ...settings, ...payload.settings };
+    if (response.ok && payload.channelAvailability) channelAvailability = { ...channelAvailability, ...payload.channelAvailability };
   } catch (error) {
     // settings defaults remain
+  }
+
+  let twoFactor = { enabled: false, backupCodesRemaining: 0 };
+  try {
+    const response = await fetchJson('/api/auth/2fa/status');
+    if (response.ok) twoFactor = { ...twoFactor, ...(await response.json()) };
+  } catch (error) {
+    // 2FA status is optional
+  }
+
+  let apiKeyRows = [];
+  let webhookRows = [];
+  try {
+    const [keysResponse, hooksResponse] = await Promise.all([fetchJson('/api/api-keys'), fetchJson('/api/webhooks')]);
+    if (keysResponse.ok) apiKeyRows = (await keysResponse.json()).apiKeys || [];
+    if (hooksResponse.ok) webhookRows = (await hooksResponse.json()).webhooks || [];
+  } catch (error) {
+    // developer access is optional
   }
 
   let adminOverview = null;
@@ -3090,7 +3178,7 @@ async function renderSettings() {
           </div>
           <form id="notifyForm" class="settings-form">
             <label class="settings-checkbox"><input id="notifyEmail" type="checkbox" ${Number(settings.notifyEmail) ? 'checked' : ''} /> Email updates <small>Dispatch summaries and billing alerts.</small></label>
-            <label class="settings-checkbox"><input id="notifySms" type="checkbox" ${Number(settings.notifySms) ? 'checked' : ''} /> SMS alerts <small>Urgent job and vehicle alerts.</small></label>
+            <label class="settings-checkbox${channelAvailability.sms ? '' : ' is-disabled'}"><input id="notifySms" type="checkbox" ${Number(settings.notifySms) ? 'checked' : ''} ${channelAvailability.sms ? '' : 'disabled'} /> SMS alerts <small>${channelAvailability.sms ? 'Urgent job and vehicle alerts by text.' : 'Not available — no SMS provider is configured.'}</small></label>
             <label class="settings-checkbox"><input id="notifyInapp" type="checkbox" ${Number(settings.notifyInapp) ? 'checked' : ''} /> In-app notifications <small>Show alerts in the notification bell.</small></label>
             <div class="settings-form-actions"><button class="dispatch-button" id="saveNotify" type="submit">Save preferences <span>→</span></button></div>
             <p class="form-error" id="notifyFormError" role="alert"></p>
@@ -3132,6 +3220,80 @@ async function renderSettings() {
             <li><span class="security-dot blue"></span> License enforcement active</li>
             <li><span class="security-dot violet"></span> Role-based access ready</li>
           </ul>
+        </article>
+
+        <article class="panel settings-panel">
+          <div class="panel-heading compact-heading">
+            <div>
+              <p class="eyebrow">SECURITY</p>
+              <h2>Two-factor authentication</h2>
+            </div>
+          </div>
+          <p class="view-subtitle" style="margin-top:-4px;">Add a one-time code from an authenticator app (Google Authenticator, Authy, 1Password) on top of your password.</p>
+          <p class="settings-checkbox" style="pointer-events:none;">Status: <strong>${twoFactor.enabled ? 'Enabled' : 'Not enabled'}</strong>${twoFactor.enabled ? ` <small>${twoFactor.backupCodesRemaining} backup code(s) remaining.</small>` : ''}</p>
+          <div id="twoFactorSetup" style="display:${twoFactor.enabled ? 'none' : 'block'};">
+            <div class="settings-form-actions"><button class="dispatch-button" id="twoFactorStart" type="button">Enable two-factor <span>→</span></button></div>
+          </div>
+          <div id="twoFactorConfirm" style="display:none;">
+            <p class="view-subtitle" style="margin:8px 0;">Scan this key in your app, then enter the 6-digit code to confirm.</p>
+            <code id="twoFactorSecret" style="display:block;background:#f2f7f5;padding:10px;border-radius:8px;word-break:break-all;"></code>
+            <label class="auth-field">Authenticator code
+              <input id="twoFactorEnableCode" type="text" inputmode="numeric" maxlength="6" placeholder="000000" class="auth-input" />
+            </label>
+            <div class="settings-form-actions"><button class="dispatch-button" id="twoFactorConfirmButton" type="button">Confirm &amp; enable <span>→</span></button></div>
+          </div>
+          <div id="twoFactorBackupPanel" style="display:none;">
+            <p class="view-subtitle" style="margin:8px 0;">Save these backup codes now. Each works once and will not be shown again.</p>
+            <pre id="twoFactorBackupCodes" style="background:#f2f7f5;padding:12px;border-radius:8px;"></pre>
+          </div>
+          <div id="twoFactorDisable" style="display:${twoFactor.enabled ? 'block' : 'none'};">
+            <div class="settings-form-grid">
+              <label>Password<input id="twoFactorDisablePassword" type="password" autocomplete="current-password" /></label>
+              <label>Authenticator or backup code<input id="twoFactorDisableCode" type="text" maxlength="11" /></label>
+            </div>
+            <div class="settings-form-actions"><button class="danger-button" id="twoFactorDisableButton" type="button">Disable two-factor <span>→</span></button></div>
+          </div>
+          <p class="form-error" id="twoFactorFormError" role="alert"></p>
+        </article>
+
+        <article class="panel settings-panel">
+          <div class="panel-heading compact-heading">
+            <div>
+              <p class="eyebrow">DEVELOPER</p>
+              <h2>API keys &amp; webhooks</h2>
+            </div>
+          </div>
+          <p class="view-subtitle" style="margin-top:-4px;">Use API keys for machine-to-machine access and webhooks to notify external systems about dispatch events.</p>
+          <form id="apiKeyForm" class="settings-form">
+            <div class="settings-form-grid">
+              <label>Key name<input name="name" placeholder="Billing integration" required /></label>
+              <label>Environment<select name="environment"><option value="live">Live</option><option value="test">Test</option></select></label>
+            </div>
+            <div class="settings-form-actions"><button class="dispatch-button" type="submit">Create API key <span>→</span></button></div>
+          </form>
+          <div id="apiKeyList" class="data-table settings-table">
+            ${apiKeyRows.length ? apiKeyRows.map((key) => `<div class="data-row"><span>${escapeHTML(key.name)} <small style="opacity:.7;">${escapeHTML(key.prefix)}… · ${escapeHTML((key.scopes || []).join(', '))}</small></span><span>${key.revokedAt ? 'Revoked' : `<button type="button" class="text-button" data-revoke-key="${escapeHTML(key.id)}" style="background:none;border:none;color:#b91c1c;text-decoration:underline;cursor:pointer;padding:0;">Revoke</button>`}</span></div>`).join('') : '<div class="data-row"><span>No API keys yet.</span></div>'}
+          </div>
+          <div id="apiKeyReveal" style="display:none;">
+            <p class="view-subtitle" style="margin:8px 0;">Copy this key now — it will not be shown again.</p>
+            <code id="apiKeyValue" style="display:block;background:#f2f7f5;padding:10px;border-radius:8px;word-break:break-all;"></code>
+          </div>
+
+          <form id="webhookForm" class="settings-form" style="margin-top:18px;">
+            <div class="settings-form-grid">
+              <label>Endpoint URL<input name="url" type="url" placeholder="https://example.com/hooks/rz" required /></label>
+              <label>Events<input name="events" placeholder="quote.created, job.assigned (blank = all)" /></label>
+            </div>
+            <div class="settings-form-actions"><button class="outline-button" type="submit">Add webhook <span>→</span></button></div>
+          </form>
+          <div id="webhookList" class="data-table settings-table">
+            ${webhookRows.length ? webhookRows.map((hook) => `<div class="data-row"><span>${escapeHTML(hook.url)} <small style="opacity:.7;">${escapeHTML((hook.events || []).join(', '))}</small></span><span>${hook.active ? 'Active' : 'Paused'} · <button type="button" class="text-button" data-remove-hook="${escapeHTML(hook.id)}" style="background:none;border:none;color:#b91c1c;text-decoration:underline;cursor:pointer;padding:0;">Remove</button></span></div>`).join('') : '<div class="data-row"><span>No webhooks yet.</span></div>'}
+          </div>
+          <div id="webhookReveal" style="display:none;">
+            <p class="view-subtitle" style="margin:8px 0;">Signing secret (verify with the <code>X-RZ-Signature</code> header):</p>
+            <code id="webhookSecretValue" style="display:block;background:#f2f7f5;padding:10px;border-radius:8px;word-break:break-all;"></code>
+          </div>
+          <p class="form-error" id="developerFormError" role="alert"></p>
         </article>
       </div>
 
@@ -3227,7 +3389,7 @@ async function renderSettings() {
       const response = await fetchJson('/api/settings', { method: 'PATCH', body: JSON.stringify({
         name: document.getElementById('settingName')?.value || settings.name,
         notifyEmail: document.getElementById('notifyEmail')?.checked ? 1 : 0,
-        notifySms: document.getElementById('notifySms')?.checked ? 1 : 0,
+        notifySms: (channelAvailability.sms && document.getElementById('notifySms')?.checked) ? 1 : 0,
         notifyInapp: document.getElementById('notifyInapp')?.checked ? 1 : 0
       }) });
       const payload = await response.json();
@@ -3254,6 +3416,144 @@ async function renderSettings() {
     } catch (requestError) {
       error.textContent = requestError.message;
     }
+  });
+
+  const twoFactorError = document.getElementById('twoFactorFormError');
+  document.getElementById('twoFactorStart')?.addEventListener('click', async () => {
+    try {
+      if (twoFactorError) twoFactorError.textContent = '';
+      const response = await fetchJson('/api/auth/2fa/setup', { method: 'POST' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Could not start two-factor setup.');
+      const secretEl = document.getElementById('twoFactorSecret');
+      if (secretEl) secretEl.textContent = payload.secret;
+      const setup = document.getElementById('twoFactorSetup');
+      const confirm = document.getElementById('twoFactorConfirm');
+      if (setup) setup.style.display = 'none';
+      if (confirm) confirm.style.display = 'block';
+      document.getElementById('twoFactorEnableCode')?.focus();
+    } catch (requestError) {
+      if (twoFactorError) twoFactorError.textContent = requestError.message;
+    }
+  });
+
+  document.getElementById('twoFactorConfirmButton')?.addEventListener('click', async () => {
+    const code = String(document.getElementById('twoFactorEnableCode')?.value || '').trim();
+    try {
+      if (twoFactorError) twoFactorError.textContent = '';
+      const response = await fetchJson('/api/auth/2fa/enable', { method: 'POST', body: JSON.stringify({ code }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Could not enable two-factor.');
+      const codesEl = document.getElementById('twoFactorBackupCodes');
+      if (codesEl) codesEl.textContent = (payload.backupCodes || []).join('\n');
+      const confirm = document.getElementById('twoFactorConfirm');
+      const backup = document.getElementById('twoFactorBackupPanel');
+      const disable = document.getElementById('twoFactorDisable');
+      if (confirm) confirm.style.display = 'none';
+      if (backup) backup.style.display = 'block';
+      if (disable) disable.style.display = 'block';
+      showToast('Two-factor authentication enabled');
+    } catch (requestError) {
+      if (twoFactorError) twoFactorError.textContent = requestError.message;
+    }
+  });
+
+  document.getElementById('twoFactorDisableButton')?.addEventListener('click', async () => {
+    const password = String(document.getElementById('twoFactorDisablePassword')?.value || '');
+    const code = String(document.getElementById('twoFactorDisableCode')?.value || '').trim();
+    try {
+      if (twoFactorError) twoFactorError.textContent = '';
+      const response = await fetchJson('/api/auth/2fa/disable', { method: 'POST', body: JSON.stringify({ password, code }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Could not disable two-factor.');
+      showToast('Two-factor authentication disabled');
+      renderSettings();
+    } catch (requestError) {
+      if (twoFactorError) twoFactorError.textContent = requestError.message;
+    }
+  });
+
+  const developerError = document.getElementById('developerFormError');
+
+  document.getElementById('apiKeyForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const name = String(form.elements.name?.value || '').trim();
+    const environment = String(form.elements.environment?.value || 'live');
+    try {
+      if (developerError) developerError.textContent = '';
+      const response = await fetchJson('/api/api-keys', { method: 'POST', body: JSON.stringify({ name, environment }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Could not create API key.');
+      const reveal = document.getElementById('apiKeyReveal');
+      const value = document.getElementById('apiKeyValue');
+      if (value) value.textContent = payload.key;
+      if (reveal) reveal.style.display = 'block';
+      showToast('API key created — copy it now');
+      form.reset();
+    } catch (requestError) {
+      if (developerError) developerError.textContent = requestError.message;
+    }
+  });
+
+  document.querySelectorAll('[data-revoke-key]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const id = button.getAttribute('data-revoke-key');
+      try {
+        if (developerError) developerError.textContent = '';
+        const response = await fetchJson(`/api/api-keys/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || 'Could not revoke API key.');
+        }
+        showToast('API key revoked');
+        renderSettings();
+      } catch (requestError) {
+        if (developerError) developerError.textContent = requestError.message;
+      }
+    });
+  });
+
+  document.getElementById('webhookForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const url = String(form.elements.url?.value || '').trim();
+    const events = String(form.elements.events?.value || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    try {
+      if (developerError) developerError.textContent = '';
+      const response = await fetchJson('/api/webhooks', { method: 'POST', body: JSON.stringify({ url, events }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Could not add webhook.');
+      const reveal = document.getElementById('webhookReveal');
+      const secret = document.getElementById('webhookSecretValue');
+      if (secret) secret.textContent = payload.secret;
+      if (reveal) reveal.style.display = 'block';
+      showToast('Webhook added — store the signing secret');
+      form.reset();
+    } catch (requestError) {
+      if (developerError) developerError.textContent = requestError.message;
+    }
+  });
+
+  document.querySelectorAll('[data-remove-hook]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const id = button.getAttribute('data-remove-hook');
+      try {
+        if (developerError) developerError.textContent = '';
+        const response = await fetchJson(`/api/webhooks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || 'Could not remove webhook.');
+        }
+        showToast('Webhook removed');
+        renderSettings();
+      } catch (requestError) {
+        if (developerError) developerError.textContent = requestError.message;
+      }
+    });
   });
 }
 

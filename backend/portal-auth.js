@@ -76,7 +76,9 @@ function userSelect() {
 }
 
 function create(deps) {
-  const { db, jwt, signToken, sendMail, mailerEnabled, emailName, isEmail, getUserSettings, requireAuth } = deps;
+  const { db, jwt, signToken, sendMail, mailerEnabled, emailName, isEmail, getUserSettings, requireAuth, JWT_SECRET } = deps;
+  const twofactor = deps.twofactor || require('./twofactor');
+  const csrfSecret = JWT_SECRET || deps.JWT_SECRET || 'csrf-fallback-secret';
   const secureCookies = /^https:/i.test(String(deps.PUBLIC_URL || '')) || process.env.NODE_ENV === 'production';
 
   function parseCookies(header) {
@@ -440,6 +442,7 @@ function create(deps) {
         refreshToken: session.refreshToken,
         sessionId: session.id,
         expiresIn: ACCESS_TTL,
+        csrfToken: twofactor.createCsrfToken(csrfSecret, session.id),
         user: publicUser(user, account, settings)
       });
     });

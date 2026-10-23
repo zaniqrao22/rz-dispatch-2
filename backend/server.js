@@ -9,10 +9,19 @@ const jwt = require('jsonwebtoken');
 const db = require('./db');
 const Stripe = require('stripe');
 const { sendMail, enabled: mailerEnabled } = require('./mailer');
+const { sms } = require('./sms');
 const { welcomeEmail, verifyEmailEmail, passwordResetEmail } = require('./mailer_templates');
 const realtime = require('./realtime-hub');
 const portalAuthModule = require('./portal-auth');
+const twofactor = require('./twofactor');
+const { routing } = require('./routing');
+const apiKeysModule = require('./api-keys');
+const webhooksModule = require('./webhooks');
+const { createAudit } = require('./audit');
 let portalAuth = null;
+const apiKeys = apiKeysModule.createApiKeys(db);
+const webhooks = webhooksModule.createWebhooks(db);
+const audit = createAudit(db, { verifyToken: (token) => jwt.verify(token, JWT_SECRET) });
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8000;
@@ -148,13 +157,47 @@ app.use((req, res, next) => {
     if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-License-Key, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-License-Key, Authorization, X-CSRF-Token');
   }
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
 
 app.use('/api', rateLimit({ windowMs: 60 * 1000, max: GLOBAL_RATE_LIMIT, name: 'global' }));
+
+// Audit trail: records mutating API requests (who/what/when/where) once the
+// response settles. Runs before the routes so req.user (set by requireAuth)
+// and the final status code are both captured.
+app.use('/api', audit.middleware);
+
+// CSRF protection (double-submit). The SPA authenticates with a bearer token
+// in localStorage/sessionStorage OR with the httpOnly session cookie. Cookie
+// auth is automatically sent by browsers, so mutating requests carrying only a
+// cookie must also present a matching `x-csrf-token`. Bearer-token requests are
+// unaffected: a cross-site attacker cannot read the token to set that header,
+// which is exactly what makes them CSRF-safe.
+const CSRF_EXEMPT = new Set([
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/otp/request',
+  '/api/auth/otp/verify',
+  '/api/auth/verify-email',
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
+  '/api/payments/webhook',
+  '/api/bookings'
+]);
+app.use('/api', (req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  if (!portalAuth) return next();
+  const sessionId = portalAuth.getSessionIdFromRequest(req);
+  if (!sessionId) return next(); // bearer-token or anonymous client
+  const fullPath = `${req.baseUrl || ''}${req.path || ''}`.replace(/\/+$/, '');
+  if (CSRF_EXEMPT.has(fullPath)) return next();
+  const presented = String(req.headers['x-csrf-token'] || '');
+  if (twofactor.verifyCsrfToken(JWT_SECRET, sessionId, presented)) return next();
+  return res.status(403).json({ error: 'Invalid or missing CSRF token. Refresh the page and try again.' });
+});
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'RZ Dispatch', appMode: APP_MODE, requireLicense: REQUIRE_LICENSE, version: '2.0.0' });
@@ -225,6 +268,7 @@ app.post('/api/auth/register', async (req, res) => {
       sessionId: session?.id || null,
       refreshToken: session?.refreshToken || null,
       expiresIn: '7d',
+      csrfToken: session ? twofactor.createCsrfToken(JWT_SECRET, session.id) : null,
       user: { id: userId, email, role, driverId: null, companyRole, companyAccountId: account?.id || null, name: settings.name }
     });
   } else {
@@ -298,6 +342,18 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(403).json({ error: 'Your company account is suspended. Contact your dispatcher.' });
   }
 
+  // Second factor: when TOTP is enabled a correct password alone is not
+  // enough. We return a short-lived challenge (signed, purpose-scoped) instead
+  // of a session; the client then calls /api/auth/2fa/verify with a code.
+  if (Number(user.totp_enabled) === 1 && user.totp_secret) {
+    const challenge = signScopedToken({ id: user.id, email: user.email, purpose: '2fa' }, '5m');
+    return res.status(200).json({
+      twoFactorRequired: true,
+      challenge,
+      message: 'Enter the 6-digit code from your authenticator app to finish signing in.'
+    });
+  }
+
   if (portalAuth) await portalAuth.clearLoginFailures(email);
   // Multi-device sessions: a server-side session row is created so this device
   // can be signed out independently, and logout-all revokes every device.
@@ -311,6 +367,7 @@ app.post('/api/auth/login', async (req, res) => {
     sessionId: session?.id || null,
     refreshToken: session?.refreshToken || null,
     expiresIn: '7d',
+    csrfToken: session ? twofactor.createCsrfToken(JWT_SECRET, session.id) : null,
     user: {
       id: user.id,
       email: user.email,
@@ -347,6 +404,7 @@ app.patch('/api/operator/jobs/:id/status', requireAuth, requireOperator, async (
   await activityPush({ initials: 'OP', name: await driverDisplayName(req.user), action: `moved ${job.id} to ${nextStatus}`, detail: `${job.from} to ${job.to}`, time: 'just now' });
   const updatedJob = await getOperatorJob(req.user, job.id);
   await announceJobChange({ ...updatedJob, operatorDriverId: req.user.driverId });
+  emitEvent('job.status_changed', { job: updatedJob, status: nextStatus }, req);
   res.json({ job: updatedJob, message: `${job.id} is now ${nextStatus}` });
 });
 
@@ -428,13 +486,14 @@ async function getUserSettings(user) {
     currency: row?.currency || '',
     timezone: row?.timezone || '',
     vehicleType: row?.vehicleType || '',
-    passengers: String(row?.passengers ?? '') || ''
+    passengers: String(row?.passengers ?? '') || '',
+    notifySmsAvailable: sms.enabled
   };
 }
 
 app.get('/api/settings', requireAuth, async (req, res) => {
   const settings = await getUserSettings(req.user);
-  res.json({ settings: { ...settings, email: req.user.email, role: req.user.role } });
+  res.json({ settings: { ...settings, email: req.user.email, role: req.user.role }, channelAvailability: { email: mailerEnabled, sms: sms.enabled } });
 });
 
 app.patch('/api/settings', requireAuth, async (req, res) => {
@@ -463,6 +522,136 @@ app.post('/api/settings/password', requireAuth, async (req, res) => {
   res.json({ success: true });
 });
 
+// --- Two-factor authentication (TOTP) -------------------------------------
+
+// Cookie-authenticated clients can fetch a fresh CSRF token bound to their
+// session; bearer-token clients simply receive one for their current session.
+app.get('/api/auth/csrf', requireAuth, (req, res) => {
+  if (!req.sessionId) return res.json({ csrfToken: null, csrfRequired: false });
+  res.json({ csrfToken: twofactor.createCsrfToken(JWT_SECRET, req.sessionId), csrfRequired: true });
+});
+
+app.get('/api/auth/2fa/status', requireAuth, async (req, res) => {
+  const row = await db.get('SELECT totp_enabled as enabled, totp_backup_codes as codes FROM users WHERE id = ?', req.user.id);
+  const hashes = twofactor.parseJsonArray(row?.codes);
+  res.json({ enabled: Number(row?.enabled) === 1, backupCodesRemaining: hashes.length });
+});
+
+// Step 1 of enrolment: mint a secret + otpauth URI. The secret is stored
+// unconfirmed (`totp_enabled` stays 0) until the user proves possession.
+app.post('/api/auth/2fa/setup', requireAuth, async (req, res) => {
+  const existing = await db.get('SELECT totp_enabled as enabled FROM users WHERE id = ?', req.user.id);
+  if (Number(existing?.enabled) === 1) {
+    return res.status(409).json({ error: 'Two-factor authentication is already enabled. Disable it first to re-enrol.' });
+  }
+  const secret = twofactor.generateSecret();
+  await db.run('UPDATE users SET totp_secret = ?, totp_enabled = 0, totp_backup_codes = NULL, totp_confirmed_at = NULL WHERE id = ?', secret, req.user.id);
+  res.json({
+    secret,
+    otpauthUrl: twofactor.otpauthUrl(secret, req.user.email),
+    digits: twofactor.DIGITS,
+    period: twofactor.PERIOD
+  });
+});
+
+// Step 2 of enrolment: confirm a code, enable 2FA, and issue backup codes.
+app.post('/api/auth/2fa/enable', requireAuth, async (req, res) => {
+  const code = String(req.body?.code || '').trim();
+  const row = await db.get('SELECT totp_secret as secret, totp_enabled as enabled FROM users WHERE id = ?', req.user.id);
+  if (Number(row?.enabled) === 1) return res.status(409).json({ error: 'Two-factor authentication is already enabled.' });
+  if (!row?.secret) return res.status(400).json({ error: 'Start enrolment before verifying a code.' });
+  if (!twofactor.verifyToken(row.secret, code)) return res.status(400).json({ error: 'That code is not valid. Check your authenticator app and try again.' });
+  const { codes, hashes } = twofactor.generateBackupCodes();
+  await db.run('UPDATE users SET totp_enabled = 1, totp_backup_codes = ?, totp_confirmed_at = ? WHERE id = ?', JSON.stringify(hashes), new Date().toISOString(), req.user.id);
+  res.json({ success: true, backupCodes: codes, message: 'Two-factor authentication is now enabled. Store your backup codes somewhere safe.' });
+});
+
+// Disable 2FA. Requires the current password (and a valid code when possible)
+// so a hijacked session cannot silently strip the second factor.
+app.post('/api/auth/2fa/disable', requireAuth, async (req, res) => {
+  const password = String(req.body?.password || '');
+  const code = String(req.body?.code || '').trim();
+  const row = await db.get('SELECT password_hash as hash, totp_secret as secret, totp_enabled as enabled FROM users WHERE id = ?', req.user.id);
+  if (Number(row?.enabled) !== 1) return res.status(400).json({ error: 'Two-factor authentication is not enabled.' });
+  if (!row || !bcrypt.compareSync(password, row.hash)) return res.status(400).json({ error: 'Your password is incorrect.' });
+  const validCode = twofactor.verifyToken(row.secret, code) || twofactor.consumeBackupCode(code, twofactor.parseJsonArray((await db.get('SELECT totp_backup_codes as codes FROM users WHERE id = ?', req.user.id))?.codes)).matched;
+  if (!validCode) return res.status(400).json({ error: 'Enter a valid authenticator or backup code.' });
+  await db.run('UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_backup_codes = NULL, totp_confirmed_at = NULL WHERE id = ?', req.user.id);
+  res.json({ success: true, message: 'Two-factor authentication has been disabled.' });
+});
+
+// Regenerate backup codes (requires a valid current code).
+app.post('/api/auth/2fa/backup-codes', requireAuth, async (req, res) => {
+  const code = String(req.body?.code || '').trim();
+  const row = await db.get('SELECT totp_secret as secret, totp_enabled as enabled FROM users WHERE id = ?', req.user.id);
+  if (Number(row?.enabled) !== 1) return res.status(400).json({ error: 'Two-factor authentication is not enabled.' });
+  if (!twofactor.verifyToken(row.secret, code)) return res.status(400).json({ error: 'That code is not valid.' });
+  const { codes, hashes } = twofactor.generateBackupCodes();
+  await db.run('UPDATE users SET totp_backup_codes = ? WHERE id = ?', JSON.stringify(hashes), req.user.id);
+  res.json({ backupCodes: codes });
+});
+
+// Complete a login that was paused for 2FA. Accepts a TOTP or a backup code.
+app.post('/api/auth/2fa/verify', async (req, res) => {
+  const challenge = String(req.body?.challenge || '');
+  const code = String(req.body?.code || '').trim();
+  let decoded;
+  try {
+    decoded = verifyScopedToken(challenge, '2fa');
+  } catch (_) {
+    return res.status(401).json({ error: 'This sign-in challenge has expired. Please sign in again.' });
+  }
+  const user = await db.get('SELECT * FROM users WHERE id = ?', decoded.id);
+  if (!user || Number(user.totp_enabled) !== 1 || !user.totp_secret) {
+    return res.status(400).json({ error: 'Two-factor authentication is not active for this account.' });
+  }
+  if (portalAuth) {
+    const lock = await portalAuth.checkLoginLock(user.email);
+    if (lock.locked) {
+      res.setHeader('Retry-After', String(lock.retryAfterSeconds || 900));
+      return res.status(429).json({ error: 'Too many attempts. Please wait a few minutes and try again.' });
+    }
+  }
+  let ok = twofactor.verifyToken(user.totp_secret, code);
+  let remainingCodes = null;
+  if (!ok) {
+    const consumed = twofactor.consumeBackupCode(code, twofactor.parseJsonArray(user.totp_backup_codes));
+    if (consumed.matched) {
+      ok = true;
+      remainingCodes = consumed.remaining;
+    }
+  }
+  if (!ok) {
+    if (portalAuth) await portalAuth.recordLoginFailure(user.email);
+    return res.status(401).json({ error: 'That code is not correct.' });
+  }
+  if (remainingCodes) {
+    await db.run('UPDATE users SET totp_backup_codes = ? WHERE id = ?', JSON.stringify(remainingCodes), user.id);
+  }
+  if (portalAuth) await portalAuth.clearLoginFailures(user.email);
+  const session = portalAuth ? await portalAuth.createSession(user, req) : null;
+  if (portalAuth && session) portalAuth.setSessionCookie(res, session.id);
+  const token = signToken({ id: user.id, email: user.email, role: user.role, driverId: user.driver_id, sid: session?.id, companyAccountId: user.company_account_id });
+  const settings = await getUserSettings(user);
+  const account = portalAuth ? await portalAuth.ensureCompanyAccount(user) : null;
+  res.json({
+    token,
+    sessionId: session?.id || null,
+    refreshToken: session?.refreshToken || null,
+    expiresIn: '7d',
+    csrfToken: session ? twofactor.createCsrfToken(JWT_SECRET, session.id) : null,
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      driverId: user.driver_id,
+      name: settings.name,
+      companyAccountId: account?.id || user.company_account_id || null,
+      accountStatus: user.account_status || 'active'
+    }
+  });
+});
+
 app.get('/api/account/summary', requireAuth, async (req, res) => {
   res.json(await buildAccountSummary(req.user));
 });
@@ -487,6 +676,71 @@ function isAdmin(req, res, next) {
   }
   next();
 }
+
+app.get('/api/admin/audit', requireAuth, isAdmin, async (req, res) => {
+  const entries = await audit.list({
+    limit: req.query.limit,
+    action: String(req.query.action || '').trim() || undefined,
+    actorEmail: String(req.query.actor || '').trim() || undefined
+  });
+  res.json({ entries, total: await audit.count() });
+});
+
+// --- API keys (machine-to-machine access) --------------------------------
+// A user manages only their own keys; the key inherits that user's role and
+// tenant, so a leaked key is no more powerful than a session for that account.
+app.get('/api/api-keys', requireAuth, async (req, res) => {
+  res.json({ apiKeys: await apiKeys.list(req.user) });
+});
+
+app.post('/api/api-keys', requireAuth, async (req, res) => {
+  try {
+    const created = await apiKeys.create(req.user, {
+      name: req.body?.name,
+      scopes: req.body?.scopes,
+      environment: req.body?.environment
+    });
+    res.status(201).json({ ...created, message: 'Store this key now — it will not be shown again.' });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.delete('/api/api-keys/:id', requireAuth, async (req, res) => {
+  const revoked = await apiKeys.revoke(req.user, req.params.id);
+  if (!revoked) return res.status(404).json({ error: 'API key not found.' });
+  res.json({ success: true, message: 'API key revoked.' });
+});
+
+// --- Outbound webhooks ---------------------------------------------------
+app.get('/api/webhooks', requireAuth, async (req, res) => {
+  res.json({ webhooks: await webhooks.list(req.user) });
+});
+
+app.post('/api/webhooks', requireAuth, async (req, res) => {
+  try {
+    const created = await webhooks.register(req.user, {
+      url: req.body?.url,
+      events: req.body?.events,
+      description: req.body?.description
+    });
+    res.status(201).json(created);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.delete('/api/webhooks/:id', requireAuth, async (req, res) => {
+  const removed = await webhooks.remove(req.user, req.params.id);
+  if (!removed) return res.status(404).json({ error: 'Webhook not found.' });
+  res.json({ success: true, message: 'Webhook removed.' });
+});
+
+app.get('/api/webhooks/:id/deliveries', requireAuth, async (req, res) => {
+  const rows = await webhooks.deliveries(req.user, req.params.id, req.query.limit);
+  if (rows == null) return res.status(404).json({ error: 'Webhook not found.' });
+  res.json({ deliveries: rows });
+});
 
 app.get('/api/admin/users', requireAuth, isAdmin, async (req, res) => {
   const status = String(req.query.status || '').trim().toLowerCase();
@@ -555,7 +809,9 @@ app.get('/api/license/status', async (req, res) => {
     mode: APP_MODE,
     message: active ? 'License active' : 'License required',
     demoKeyConfigured: Boolean(DEMO_LICENSE_KEY),
-    paymentsConfigured: Boolean(stripe)
+    paymentsConfigured: Boolean(stripe),
+    smsConfigured: sms.enabled,
+    emailConfigured: mailerEnabled
   });
 });
 
@@ -604,7 +860,9 @@ portalAuth = portalAuthModule.create({
   isEmail,
   getUserSettings,
   PUBLIC_URL,
-  requireAuth
+  requireAuth,
+  JWT_SECRET,
+  twofactor
 });
 portalAuth.registerRoutes(app);
 
@@ -662,9 +920,9 @@ app.post('/api/quotes/distance', async (req, res) => {
   const to = String(req.body?.to || '').trim();
   if (!from || !to) return res.status(400).json({ ok: false, error: 'Add a pickup and dropoff address first.' });
   try {
-    const miles = await estimateRouteMiles(from, to);
-    if (miles == null) return res.status(422).json({ ok: false, error: 'Could not look up a distance for those addresses — enter an estimate manually.' });
-    res.json({ ok: true, miles, from, to });
+    const route = await estimateRoute(from, to);
+    if (route.miles == null) return res.status(422).json({ ok: false, error: 'Could not look up a distance for those addresses — enter an estimate manually.' });
+    res.json({ ok: true, miles: route.miles, source: route.source, provider: route.provider, from, to });
   } catch (error) {
     res.status(500).json({ ok: false, error: 'Distance lookup is temporarily unavailable — enter miles manually.' });
   }
@@ -1029,6 +1287,7 @@ app.post('/api/quotes', requireAuth, requireStaff, async (req, res) => {
   const normalized = normalizeQuoteInput(req.body || {});
   const estimate = await calculateQuoteEstimate(normalized);
   const quote = await createQuoteRecord({ ...normalized, quoteTotal: estimate.total, status: 'pending' });
+  emitEvent('quote.created', { quote }, req);
   res.status(201).json({ quote, estimate });
 });
 
@@ -1046,6 +1305,13 @@ app.post('/api/bookings', async (req, res) => {
   const estimate = await calculateQuoteEstimate(normalized);
   const quote = await createQuoteRecord({ ...normalized, quoteTotal: estimate.total, status: 'accepted' });
   const booking = await createBookingRecord({ ...quote, status: 'booked', quoteTotal: estimate.total });
+  await notifyCustomerSms(booking.email, `RZ Dispatch: your booking ${booking.id} is confirmed for ${booking.serviceDate}. We will text you when a driver is on the way.`);
+  // Scope the event to the customer's own tenant when they have an account;
+  // anonymous walk-up bookings are not broadcast to other subscribers.
+  const customerUser = booking.email
+    ? await db.get('SELECT id, company_account_id FROM users WHERE LOWER(email) = ?', String(booking.email).toLowerCase())
+    : null;
+  if (customerUser) emitEvent('booking.created', { booking }, { user: { id: customerUser.id, companyAccountId: customerUser.company_account_id || null } });
   res.status(201).json({ quote, booking, estimate });
 });
 
@@ -1092,6 +1358,8 @@ app.post('/api/bookings/:id/dispatch', requireStaff, async (req, res) => {
   await db.run('INSERT INTO jobs (id, type, priority, from_address, to_address, time, distance, price, status, driver, booking_id, vehicle_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     job.id, job.type, job.priority, job.from, job.to, job.time, job.distance, job.price, job.status, null, booking.id, vehicleId, new Date().toISOString());
   await activityPush({ initials: 'RZ', name: staffDisplayName(req.user), action: `dispatched ${booking.id}`, detail: `${booking.pickupAddress} to ${booking.dropoffAddress} · ${job.id}`, time: 'just now' });
+  await notifyCustomerSms(booking.email, `RZ Dispatch: ${booking.id} is confirmed and queued as ${job.id}.`);
+  emitEvent('job.dispatched', { job: { ...job, vehicleId }, booking: { id: booking.id, email: booking.email } }, req);
   res.status(201).json({ job: { ...job, vehicleId }, message: `${booking.id} dispatched as ${job.id}` });
 });
 
@@ -1163,6 +1431,7 @@ app.post('/api/jobs', requireStaff, async (req, res) => {
     toLng: -122.44 + Math.random() * 0.07
   };
   await db.run('INSERT INTO jobs (id, type, priority, from_address, to_address, time, distance, price, status, driver, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', job.id, job.type, job.priority, job.from, job.to, job.time, job.distance, job.price, job.status, null, new Date().toISOString());
+  emitEvent('job.created', { job }, req);
   res.status(201).json({ job });
 });
 
@@ -1200,6 +1469,11 @@ app.post('/api/jobs/:id/assign', requireStaff, async (req, res) => {
   await activityPush({ initials: 'RZ', name: staffDisplayName(req.user), action: `assigned ${job.id}`, detail: `${driver.name} · ${vehicle.plate}`, time: 'just now' });
   const assignedJob = { ...job, status: 'assigned', driver: driver.name, vehicleId: vehicle.id, vehiclePlate: vehicle.plate, operatorDriverId: driver.id };
   realtime.broadcast('job.assigned', { job: assignedJob, message: `${job.id} assigned to ${driver.name}` }, ['staff', { type: 'driver', id: driver.id }]);
+  if (job.bookingId) {
+    const bookingEmail = (await db.get('SELECT email FROM bookings WHERE id = ?', job.bookingId))?.email;
+    await notifyCustomerSms(bookingEmail, `RZ Dispatch: a driver has been assigned to your booking (${job.id}).`);
+  }
+  emitEvent('job.assigned', { job: assignedJob }, req);
   res.json({ job: assignedJob, message: `${job.id} assigned to ${driver.name} (${vehicle.plate})` });
 });
 
@@ -1222,7 +1496,9 @@ app.patch('/api/jobs/:id', requireStaff, async (req, res) => {
   await db.run('UPDATE jobs SET type = ?, priority = ?, from_address = ?, to_address = ?, time = ?, status = ? WHERE id = ?',
     type, priority, from, to, time, status, current.id);
   await activityPush({ initials: 'RZ', name: staffDisplayName(req.user), action: `updated ${current.id}`, detail: `${from} to ${to}`, time: 'just now' });
-  res.json({ job: (await getJobs()).find((item) => item.id === current.id), message: `${current.id} updated` });
+  const updatedJob = (await getJobs()).find((item) => item.id === current.id);
+  emitEvent('job.updated', { job: updatedJob }, req);
+  res.json({ job: updatedJob, message: `${current.id} updated` });
 });
 
 app.delete('/api/jobs/:id', requireStaff, async (req, res) => {
@@ -1383,6 +1659,15 @@ app.post('/api/optimization/apply', requireStaff, async (req, res) => {
   res.json({ success: true, jobs: optimized, count: optimized.length, message: optimized.length ? `Route optimized for ${optimized.length} active loads` : 'No active loads to optimize' });
 });
 
+// Legal pages. Served under clean URLs (/terms, /privacy) as well as the
+// static /terms.html and /privacy.html files, and linked from the app footer.
+app.get(['/terms', '/terms.html', '/legal/terms'], (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'frontend', 'terms.html'));
+});
+app.get(['/privacy', '/privacy.html', '/legal/privacy'], (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'frontend', 'privacy.html'));
+});
+
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
 app.use('/api', (req, res) => res.status(404).json({ error: 'API route not found' }));
 // Express error middleware: always answer the front end with JSON, never an
@@ -1428,6 +1713,9 @@ if (require.main === module) {
 module.exports = {
   app,
   realtime,
+  audit,
+  apiKeys,
+  webhooks,
   stripe,
   handleStripeWebhook,
   initializeDatabase,
@@ -1568,6 +1856,23 @@ type TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open',
       created_at TEXT NOT NULL
     )`,
+    // Audit trail: one row per mutating API request. Kept separate from the
+    // user-facing `activity` feed (which is operational narration).
+    `CREATE TABLE IF NOT EXISTS platform_activity (
+      id TEXT PRIMARY KEY,
+      actor_user_id TEXT,
+      actor_email TEXT,
+      actor_role TEXT,
+      action TEXT NOT NULL,
+      target TEXT,
+      method TEXT,
+      path TEXT,
+      ip TEXT,
+      status TEXT,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_platform_activity_created ON platform_activity (created_at DESC)`,
     `CREATE TABLE IF NOT EXISTS services (
       key TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -1679,7 +1984,13 @@ type TEXT NOT NULL,
     `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS notify_inapp INTEGER NOT NULL DEFAULT 1`,
     `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS vehicle_type TEXT`,
     `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS passengers INTEGER NOT NULL DEFAULT 1`,
-    ...portalAuthModule.schemaStatements
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_backup_codes TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_confirmed_at TEXT`,
+    ...portalAuthModule.schemaStatements,
+    ...apiKeysModule.schemaStatements,
+    ...webhooksModule.schemaStatements
   ];
 
   // Detect whether the admin-approval `status` column already exists BEFORE
@@ -1785,10 +2096,40 @@ function signToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
 }
 
+// Short-lived, purpose-scoped tokens (2FA challenges, password resets). The
+// `purpose` claim is checked on every consumption so a token minted for one
+// flow can never be replayed against another.
+function signScopedToken(payload, expiresIn = '10m') {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn });
+}
+
+function verifyScopedToken(token, purpose) {
+  const decoded = jwt.verify(token, JWT_SECRET);
+  if (decoded.purpose !== purpose) throw new Error('Token purpose mismatch.');
+  return decoded;
+}
+
 async function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const userColumns = 'SELECT id, email, role, driver_id as driverId, status, company_account_id as companyAccountId, company_role as companyRole, account_status as accountStatus FROM users WHERE id = ?';
   try {
+    // API key authentication (machine-to-machine). Accepted either as
+    // `X-API-Key` or as an `Authorization: Bearer rz_...` value. Keys are
+    // recognised by their distinctive prefix before any JWT parsing so an API
+    // key is never mistaken for a malformed JWT.
+    const apiKeyCandidate = String(req.headers['x-api-key'] || (header.startsWith('Bearer ') ? header.slice(7) : '') || '').trim();
+    if (apiKeysModule.looksLikeApiKey(apiKeyCandidate)) {
+      const keyInfo = await apiKeys.verify(apiKeyCandidate);
+      if (!keyInfo) return res.status(401).json({ error: 'Invalid or revoked API key.' });
+      const user = await db.get(userColumns, keyInfo.userId);
+      if (!user) return res.status(401).json({ error: 'The API key owner no longer exists.' });
+      if (user.status === 'pending' || user.status === 'rejected') return res.status(403).json({ error: 'The API key owner is not active.' });
+      if (user.accountStatus === 'suspended') return res.status(403).json({ error: 'The API key owner account is suspended.' });
+      req.user = user;
+      req.apiKey = keyInfo;
+      req.apiScopes = keyInfo.scopes;
+      return next();
+    }
     if (header.startsWith('Bearer ')) {
       const token = header.slice(7);
       const decoded = jwt.verify(token, JWT_SECRET);
@@ -2225,13 +2566,15 @@ function haversineMiles(lat1, lon1, lat2, lon2) {
 }
 
 async function estimateRouteMiles(from, to) {
-  const [fromLat, fromLon] = await geocodeAddress(from);
-  if (fromLat == null) return null;
-  const [toLat, toLon] = await geocodeAddress(to);
-  if (toLat == null) return null;
-  const roadFactor = 1.25;
-  const miles = haversineMiles(fromLat, fromLon, toLat, toLon) * roadFactor;
-  return Math.max(1, Math.round(miles));
+  const result = await routing.distanceMiles(from, to);
+  return result.miles;
+}
+
+// Like estimateRouteMiles but also reports how the number was produced
+// ('provider' = real road routing, 'estimate' = haversine fallback) so the UI
+// can tell the customer whether the distance is authoritative.
+async function estimateRoute(from, to) {
+  return routing.distanceMiles(from, to);
 }
 
 async function lookupCustomerOrder({ orderId, email } = {}) {
@@ -2330,13 +2673,62 @@ async function announceMessage(message) {
   realtime.broadcast('message.new', { message }, audiences);
 }
 
+// Customer-facing SMS copy for job status transitions. Only these statuses
+// produce a text message, and only when the customer has opted in (notify_sms)
+// and stored a phone number.
+const SMS_JOB_MESSAGES = {
+  assigned: 'A driver has been assigned to your booking and will depart soon.',
+  en_route: 'Your driver is on the way to your pickup point.',
+  arrived: 'Your driver has arrived at your pickup point.',
+  picked_up: 'You are on the way to your destination.',
+  delivered: 'Your trip is complete. Thank you for choosing RZ Dispatch.',
+  completed: 'Your trip is complete. Thank you for choosing RZ Dispatch.'
+};
+
+/**
+ * Send a transactional text to a customer by email, honoring their stored
+ * notification preferences. Never throws: a failed or unconfigured SMS must
+ * not affect the operation (job update, booking, etc.) that triggered it.
+ */
+async function notifyCustomerSms(email, body) {
+  if (!sms.enabled) return { skipped: 'sms-not-configured' };
+  const address = String(email || '').trim().toLowerCase();
+  if (!address) return { skipped: 'no-email' };
+  try {
+    const row = await db.get(
+      'SELECT us.notify_sms as notifySms, us.phone FROM users u LEFT JOIN user_settings us ON us.user_id = u.id WHERE LOWER(u.email) = ?',
+      address
+    );
+    if (!row || Number(row.notifySms) !== 1 || !row.phone) return { skipped: 'not-opted-in' };
+    await sms.send(row.phone, body);
+    return { sent: true };
+  } catch (error) {
+    console.error('[sms] failed to send customer text:', error?.message || error);
+    return { error: true };
+  }
+}
+
+// Fire-and-forget outbound webhook. Scoped to the acting user's tenant so an
+// event never leaks to another company's subscribers. Never throws.
+function emitEvent(event, data, req) {
+  if (!req || !req.user) return;
+  const companyAccountId = req.user.companyAccountId || req.user.company_account_id || null;
+  webhooks
+    .emit(event, data, { companyAccountId, userId: req.user.id })
+    .catch((error) => console.error('[webhooks] emit failed:', error?.message || error));
+}
+
 async function announceJobChange(job) {
   if (!job) return;
   const audiences = ['staff'];
   if (job.operatorDriverId) audiences.push({ type: 'driver', id: job.operatorDriverId });
   if (job.bookingId) {
     const booking = await db.get('SELECT email FROM bookings WHERE id = ?', job.bookingId);
-    if (booking && booking.email) audiences.push({ type: 'customer', email: booking.email });
+    if (booking && booking.email) {
+      audiences.push({ type: 'customer', email: booking.email });
+      const statusMessage = SMS_JOB_MESSAGES[job.status];
+      if (statusMessage) await notifyCustomerSms(booking.email, `RZ Dispatch: ${statusMessage} (${job.id})`);
+    }
   }
   if (job.driver) {
     const driver = (await getDrivers()).find((candidate) => candidate.name === job.driver);

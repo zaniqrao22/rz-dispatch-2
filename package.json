@@ -4,7 +4,7 @@
   "description": "Fleet operations SaaS dashboard — dispatch jobs, drivers, vehicles, bookings, CRM, and customer/operator portals with Stripe licensing.",
   "main": "backend/server.js",
   "scripts": {
-    "test": "node --test",
+    "test": "node --test --test-concurrency=1",
     "start": "node scripts/watchdog.js",
     "stop": "node scripts/stop-app.js",
     "start:direct": "node backend/server.js",
